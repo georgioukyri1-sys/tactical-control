@@ -1,0 +1,7 @@
+streamlit>=1.41.0
+pandas
+numpy
+requests
+folium
+streamlit-folium
+streamlit-js-eval

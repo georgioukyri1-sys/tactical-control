@@ -4,6 +4,7 @@ import numpy as np
 import time
 import urllib.parse
 import requests
+from io import StringIO
 import folium
 from streamlit_folium import st_folium
 from folium.plugins import HeatMap
@@ -11,7 +12,7 @@ from folium.plugins import HeatMap
 # --- 1. Global Page Setup ---
 st.set_page_config(
     page_title="Tactical Command Matrix",
-    page_icon="📡",  
+    page_icon="📡",
     layout="wide",
     initial_sidebar_state="collapsed"
 )
@@ -23,6 +24,14 @@ st.markdown("""
         background-color: #0b0f14;
         color: #7fa483;
         font-family: 'Consolas', 'Courier New', monospace;
+    }
+    /* Style native Streamlit bordered containers to match tactical panels */
+    [data-testid="stVerticalBlockBorderWrapper"] {
+        background-color: #0d121a;
+        border: 1px solid #1f2d3d !important;
+        border-radius: 3px !important;
+        padding: 12px;
+        margin-bottom: 15px;
     }
     .tactical-header-container {
         border-radius: 4px;
@@ -54,13 +63,6 @@ st.markdown("""
         margin-bottom: 20px;
         font-size: 13px;
         font-weight: bold;
-    }
-    .panel-box {
-        background-color: #0d121a;
-        border: 1px solid #1f2d3d;
-        border-radius: 3px;
-        padding: 12px;
-        margin-bottom: 15px;
     }
     .panel-header {
         display: flex;
@@ -135,51 +137,58 @@ st.markdown("""
 
 # --- 3. Mathematical & Data Processing Helper Functions ---
 def haversine_distance(lat1, lon1, lat2, lon2):
-    R = 6371.0 # Earth's radius in KM
+    R = 6371.0  # Earth's radius in KM
     p = np.pi / 180
-    a = 0.5 - np.cos((lat2 - lat1) * p)/2 + np.cos(lat1 * p) * np.cos(lat2 * p) * (1 - np.cos((lon2 - lon1) * p)) / 2
+    a = (
+        0.5
+        - np.cos((lat2 - lat1) * p) / 2
+        + np.cos(lat1 * p) * np.cos(lat2 * p) * (1 - np.cos((lon2 - lon1) * p)) / 2
+    )
     return 2 * R * np.arcsin(np.sqrt(a))
 
-def render_download_module(fire_points_list, closest_fire_dist, test_temp):
-    st.markdown("""
-    <div class="panel-box" style="margin-top:10px;">
+def render_panel_header(title_text):
+    st.markdown(f"""
         <div class="panel-header">
-            <h3 class="panel-title">💾 TACTICAL MATRIX DATA EXPORT SYSTEM</h3>
+            <h3 class="panel-title">{title_text}</h3>
             <span class="panel-controls">🗕 🗖 🗙</span>
         </div>
     """, unsafe_allow_html=True)
-    
-    st.markdown("<p style='font-size:11px; color:#8b949e; margin-top:0;'>Compile structural core analytics into an encrypted plaintext sequence dump (.log):</p>", unsafe_allow_html=True)
-    
-    timestamp_header = time.strftime("%Y-%m-%d %H:%M:%S")
-    threat_string = f"{closest_fire_dist:.2f} KM" if closest_fire_dist != float('inf') else "CLEAR"
-    
-    log_payload_dump = (
-        f"==================================================\n"
-        f"        TACTICAL MATRIX OPERATIONS RECORD          \n"
-        f"==================================================\n"
-        f"TIMESTAMP LOG RECORDED : {timestamp_header}\n"
-        f"ZONE CORE TEMPERATURE  : {test_temp}°C\n"
-        f"NEAREST THREAT VECTOR  : {threat_string}\n"
-        f"TOTAL COUNT HOTSPOTS   : {len(fire_points_list)}\n"
-        f"--------------------------------------------------\n"
-        f"SYSTEM LOG HISTORY ENTRIES:\n"
-        f" - [SYS] Emergency Comm tracking telemetry matrix deployed.\n"
-        f" - [NASA_API] Satellite query bounds verified successfully.\n"
-        f" - [CALC] Vector radius proximity computation verified.\n"
-        f"==================================================\n"
-        f"EOF - DATA INTEGRITY SECURED\n"
-    )
-    
-    st.download_button(
-        label="📥 DOWNLOAD SECURE INCIDENT LOG FILE (.LOG)",
-        data=log_payload_dump,
-        file_name=f"tactical_matrix_dump_{int(time.time())}.log",
-        mime="text/plain",
-        use_container_width=True
-    )
-    st.markdown("</div>", unsafe_allow_html=True)
 
+def render_download_module(fire_points_list, closest_fire_dist, test_temp):
+    with st.container(border=True):
+        render_panel_header("💾 TACTICAL MATRIX DATA EXPORT SYSTEM")
+        st.markdown(
+            "<p style='font-size:11px; color:#8b949e; margin-top:0;'>Compile structural core analytics into an encrypted plaintext sequence dump (.log):</p>",
+            unsafe_allow_html=True
+        )
+        
+        timestamp_header = time.strftime("%Y-%m-%d %H:%M:%S")
+        threat_string = f"{closest_fire_dist:.2f} KM" if closest_fire_dist != float('inf') else "CLEAR"
+        
+        log_payload_dump = (
+            f"==================================================\n"
+            f"        TACTICAL MATRIX OPERATIONS RECORD          \n"
+            f"==================================================\n"
+            f"TIMESTAMP LOG RECORDED : {timestamp_header}\n"
+            f"ZONE CORE TEMPERATURE  : {test_temp}°C\n"
+            f"NEAREST THREAT VECTOR  : {threat_string}\n"
+            f"TOTAL COUNT HOTSPOTS   : {len(fire_points_list)}\n"
+            f"--------------------------------------------------\n"
+            f"SYSTEM LOG HISTORY ENTRIES:\n"
+            f" - [SYS] Emergency Comm tracking telemetry matrix deployed.\n"
+            f" - [NASA_API] Satellite query bounds verified successfully.\n"
+            f" - [CALC] Vector radius proximity computation verified.\n"
+            f"==================================================\n"
+            f"EOF - DATA INTEGRITY SECURED\n"
+        )
+        
+        st.download_button(
+            label="📥 DOWNLOAD SECURE INCIDENT LOG FILE (.LOG)",
+            data=log_payload_dump,
+            file_name=f"tactical_matrix_dump_{int(time.time())}.log",
+            mime="text/plain",
+            width="stretch"
+        )
 
 # --- 4. Setup Initial Application States ---
 if "next_of_kin" not in st.session_state:
@@ -189,7 +198,10 @@ if "next_of_kin" not in st.session_state:
 
 # --- 5. Configuration & Simulation Panel ---
 with st.expander("🛠️ TEST FACILITIES & GEOTAG SIMULATION BAY", expanded=True):
-    st.markdown("<p style='font-size:12px; color:#52a3ff;'>Engineering Diagnostic Console: Setup live satellite parameters and system configurations.</p>", unsafe_allow_html=True)
+    st.markdown(
+        "<p style='font-size:12px; color:#52a3ff;'>Engineering Diagnostic Console: Setup live satellite parameters and system configurations.</p>",
+        unsafe_allow_html=True
+    )
     
     api_col1, api_col2 = st.columns(2)
     with api_col1:
@@ -230,7 +242,9 @@ closest_fire_dist = float('inf')
 api_log_status = "FETCH INITIALIZED"
 
 lat_delta = scan_radius_km / 111.0
-lon_delta = scan_radius_km / (111.0 * np.cos(np.radians(house_lat)))
+cos_lat = max(np.cos(np.radians(house_lat)), 0.0001)
+lon_delta = scan_radius_km / (111.0 * cos_lat)
+
 min_lon = house_lon - lon_delta
 min_lat = house_lat - lat_delta
 max_lon = house_lon + lon_delta
@@ -239,10 +253,21 @@ max_lat = house_lat + lat_delta
 bbox_string = f"{min_lon:.4f},{min_lat:.4f},{max_lon:.4f},{max_lat:.4f}"
 firms_url = f"https://firms.modaps.eosdis.nasa.gov/api/area/csv/{firms_api_key}/VIIRS_SNPP_NRT/{bbox_string}/1"
 
+def inject_simulation_fires():
+    global closest_fire_dist
+    sim_offsets = [[0.012, -0.015], [-0.008, 0.022], [0.031, -0.005]]
+    for lat_off, lon_off in sim_offsets:
+        f_lat = house_lat + lat_off
+        f_lon = house_lon + lon_off
+        dist = haversine_distance(house_lat, house_lon, f_lat, f_lon)
+        if dist <= scan_radius_km:
+            fire_points.append([f_lat, f_lon, 15.0])
+            if dist < closest_fire_dist:
+                closest_fire_dist = dist
+
 try:
     response = requests.get(firms_url, timeout=10)
     if response.status_code == 200 and "latitude" in response.text:
-        from io import StringIO
         df_fires = pd.read_csv(StringIO(response.text))
         for _, row in df_fires.iterrows():
             f_lat = float(row['latitude'])
@@ -256,18 +281,10 @@ try:
         api_log_status = f"SYNC SUCCESSFUL: Found {len(fire_points)} Active Hotspots"
     else:
         api_log_status = "API FALLBACK: Injecting sandbox simulation vectors"
-        sim_offsets = [[0.012, -0.015], [-0.008, 0.022], [0.031, -0.005]]
-        for offset in sim_offsets:
-            f_lat = house_lat + offset
-            f_lon = house_lon + offset
-            dist = haversine_distance(house_lat, house_lon, f_lat, f_lon)
-            if dist <= scan_radius_km:
-                fire_points.append([f_lat, f_lon, 15.0])
-                if dist < closest_fire_dist:
-                    closest_fire_dist = dist
+        inject_simulation_fires()
 except Exception as e:
-    api_log_status = f"CONNECTION FAULT: {str(e)}"
-    closest_fire_dist = 4.21
+    api_log_status = f"CONNECTION FAULT ({type(e).__name__}): Injecting sandbox vectors"
+    inject_simulation_fires()
 
 # Threshold warning toggle
 is_breached = len(fire_points) > 0 and closest_fire_dist < 10.0
@@ -283,12 +300,13 @@ if is_breached:
     </div>
     """, unsafe_allow_html=True)
 else:
+    display_dist = closest_fire_dist if closest_fire_dist != float('inf') else 0.0
     st.markdown(f"""
     <div class="tactical-header-container header-nominal">
         <h1 class="tactical-title" style="color: #2ed573; text-shadow: 0 0 5px rgba(46, 213, 115, 0.4);">TACTICAL SECURE: NO IMMEDIATE FLAME BREACH</h1>
     </div>
     <div class="sub-status-bar" style="background-color: #0a170f; border: 1px solid #1a7c3e;">
-        <span style="color: #2ed573;">🟢 SYSTEM STATUS: ONLINE NOMINAL (NEAREST SECURE COHORT: {closest_fire_dist if closest_fire_dist != float('inf') else 0.0:.2f} KM)</span>
+        <span style="color: #2ed573;">🟢 SYSTEM STATUS: ONLINE NOMINAL (NEAREST SECURE COHORT: {display_dist:.2f} KM)</span>
         <span style="color: #2ed573;">ALL PERIMETERS SECURE 🔐</span>
     </div>
     """, unsafe_allow_html=True)
@@ -297,72 +315,77 @@ else:
 col_map, col_telemetry = st.columns(2)
 
 with col_map:
-    st.markdown("""
-    <div class="panel-box">
-        <div class="panel-header">
-            <h3 class="panel-title">📡 3D HYBRID SATELLITE THERMAL TRACKING ENGINE</h3>
-            <span class="panel-controls">🗕 🗖 🗙</span>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    m = folium.Map(location=[house_lat, house_lon], zoom_start=12, tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", attr="Esri")
-    if fire_points:
-        HeatMap(data=[[p[0], p[1], 1] for p in fire_points], radius=25, blur=15, gradient={0.4: 'yellow', 0.65: 'orange', 1.0: 'red'}).add_to(m)
-        
-    folium.Marker([house_lat, house_lon], popup="🏡 TARGET HOUSE", icon=folium.Icon(color="red", icon="home")).add_to(m)
-    folium.Marker([user_lat, user_lon], popup="🏃 USER OPS", icon=folium.Icon(color="blue", icon="user")).add_to(m)
-    st_folium(m, use_container_width=True, height=350, key="satellite_radar_view")
-
-    st.markdown("""
-    <div class="panel-box" style="margin-top:15px;">
-        <div class="panel-header">
-            <h3 class="panel-title">🗃️ ADD EMERGENCY CONTACTS / NEXT OF KIN</h3>
-            <span class="panel-controls">🗕 🗖 🗙</span>
-        </div>
-    """, unsafe_allow_html=True)
-    
-    with st.form("kin_entry_form", clear_on_submit=True):
-        k_col1, k_col2, k_col3 = st.columns(3)
-        with k_col1: new_name = st.text_input("Next of Kin Name")
-        with k_col2: new_rel = st.text_input("Relationship")
-        with k_col3: new_vec = st.text_input("Phone/Email Identifier")
-        submit_kin = st.form_submit_button("➕ LOG CONTACT ENTRY")
-        
-        if submit_kin and new_name and new_vec:
-            st.session_state.next_of_kin.append({"Name": new_name, "Relation": new_rel, "Contact Vector": new_vec})
-            st.toast(f"Logged safety node for {new_name}.", icon="✅")
+    with st.container(border=True):
+        render_panel_header("📡 3D HYBRID SATELLITE THERMAL TRACKING ENGINE")
+        m = folium.Map(
+            location=[house_lat, house_lon],
+            zoom_start=12,
+            tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+            attr="Esri"
+        )
+        if fire_points:
+            HeatMap(
+                data=[[p[0], p[1], 1] for p in fire_points],
+                radius=25,
+                blur=15,
+                gradient={0.4: 'yellow', 0.65: 'orange', 1.0: 'red'}
+            ).add_to(m)
             
-    st.dataframe(pd.DataFrame(st.session_state.next_of_kin), hide_index=True, use_container_width=True)
-    st.markdown("</div>", unsafe_allow_html=True)
+        folium.Marker(
+            [house_lat, house_lon],
+            popup="🏡 TARGET HOUSE",
+            icon=folium.Icon(color="red", icon="home")
+        ).add_to(m)
+        folium.Marker(
+            [user_lat, user_lon],
+            popup="🏃 USER OPS",
+            icon=folium.Icon(color="blue", icon="user")
+        ).add_to(m)
+        st_folium(m, width=700, height=350, key="satellite_radar_view")
+
+    with st.container(border=True):
+        render_panel_header("🗃️ ADD EMERGENCY CONTACTS / NEXT OF KIN")
+        with st.form("kin_entry_form", clear_on_submit=True):
+            k_col1, k_col2, k_col3 = st.columns(3)
+            with k_col1:
+                new_name = st.text_input("Next of Kin Name")
+            with k_col2:
+                new_rel = st.text_input("Relationship")
+            with k_col3:
+                new_vec = st.text_input("Phone/Email Identifier")
+            submit_kin = st.form_submit_button("➕ LOG CONTACT ENTRY")
+            
+            if submit_kin and new_name and new_vec:
+                st.session_state.next_of_kin.append({
+                    "Name": new_name,
+                    "Relation": new_rel,
+                    "Contact Vector": new_vec
+                })
+                st.toast(f"Logged safety node for {new_name}.", icon="✅")
+                
+        st.dataframe(
+            pd.DataFrame(st.session_state.next_of_kin),
+            hide_index=True,
+            width="stretch"
+        )
 
 with col_telemetry:
-    st.markdown("""
-    <div class="panel-box">
-        <div class="panel-header">
-            <h3 class="panel-title">📊 SYSTEM TELEMETRY MATRIX</h3>
-            <span class="panel-controls">🗕 🗖 🗙</span>
+    with st.container(border=True):
+        render_panel_header("📊 SYSTEM TELEMETRY MATRIX")
+        separation_dist = haversine_distance(house_lat, house_lon, user_lat, user_lon)
+        threat_val_string = f"{closest_fire_dist:.2f} KM" if closest_fire_dist != float('inf') else "CLEAR"
+        
+        st.markdown(f"""
+        <div class="status-pill-container">
+            <div class="status-pill"><div style="font-size:10px; color:#8b949e;">ZONE TEMP</div><div class="pill-val" style="color:#ff4757;">{test_temp}°C</div></div>
+            <div class="status-pill"><div style="font-size:10px; color:#8b949e;">FIRE DISTANCE</div><div class="pill-val" style="color:#ff9f43;">{threat_val_string}</div></div>
+            <div class="status-pill"><div style="font-size:10px; color:#8b949e;">USER SEPARATION</div><div class="pill-val" style="color:#52a3ff;">{separation_dist:.2f} KM</div></div>
         </div>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    separation_dist = haversine_distance(house_lat, house_lon, user_lat, user_lon)
-    threat_val_string = f"{closest_fire_dist:.2f} KM" if closest_fire_dist != float('inf') else "CLEAR"
-    
-    st.markdown(f"""
-    <div class="status-pill-container">
-        <div class="status-pill"><div style="font-size:10px; color:#8b949e;">ZONE TEMP</div><div class="pill-val" style="color:#ff4757;">{test_temp}°C</div></div>
-        <div class="status-pill"><div style="font-size:10px; color:#8b949e;">FIRE DISTANCE</div><div class="pill-val" style="color:#ff9f43;">{threat_val_string}</div></div>
-        <div class="status-pill"><div style="font-size:10px; color:#8b949e;">USER SEPARATION</div><div class="pill-val" style="color:#52a3ff;">{separation_dist:.2f} KM</div></div>
-    </div>
-    """, unsafe_allow_html=True)
+        """, unsafe_allow_html=True)
 
-    st.markdown(f"""
-    <div class="panel-box" style="margin-top:10px;">
-        <div class="panel-header">
-            <h3 class="panel-title">⚙️ INFRASTRUCTURE TEST STATUS</h3>
-            <span class="panel-controls">🗕 🗖 🗙</span>
-        </div>
+    with st.container(border=True):
+        render_panel_header("⚙️ INFRASTRUCTURE TEST STATUS")
+        st.markdown(f"""
         <div style="font-size:11px; line-height:1.5; color:#7fa483;">
             <p style="margin:2px 0; color:#2ed573;">✔️ PERIMETER SENSOR CALIBRATION: Complete</p>
             <p style="margin:2px 0; color:#2ed573;">✔️ NASA FIRMS GEOSPATIAL FEED: Active</p>
@@ -370,51 +393,39 @@ with col_telemetry:
             <p style="margin:2px 0;">• RADAR CONTEXT MAPPING: Bounding Box Vector Ingestion active</p>
             <p style="margin:2px 0; color:#52a3ff;">• TOTAL THERMAL HOTSPOTS DETECTED WITHIN SCAN ZONE: {len(fire_points)}</p>
         </div>
-    </div>
-    """, unsafe_allow_html=True)
+        """, unsafe_allow_html=True)
 
-    st.markdown("""
-    <div class="panel-box" style="margin-top:10px;">
-        <div class="panel-header">
-            <h3 class="panel-title">📡 LOCATION SHARE & STATUS BROADCASTER</h3>
-            <span class="panel-controls">🗕 🗖 🗙</span>
-        </div>
-    """, unsafe_allow_html=True)
-    
-    contact_options = [f"{c['Name']} ({c['Relation']})" for c in st.session_state.next_of_kin]
-    chosen_contact = st.selectbox("Active Target Relay", contact_options)
-    
-    maps_query_url = f"https://www.google.com/maps?q={user_lat},{user_lon}"
-    broadcast_msg = f"TACTICAL ALERT BROADCAST: Proximity tracking alert active. Nearest fire perimeter scan is {threat_val_string} away from target house asset. Pin coordinate trace: {maps_query_url}"
-    
-    encoded_payload = urllib.parse.quote(broadcast_msg)
-    whatsapp_comms_endpoint = f"https://api.whatsapp.com/send?text={encoded_payload}"
-    
-    st.markdown(f"""
-    <a href="{whatsapp_comms_endpoint}" target="_blank" class="btn-broadcast">🚀 SEND LOCATION & 'SAFE' STATUS TO {chosen_contact.upper()}</a>
-    """, unsafe_allow_html=True)
-    st.markdown("</div>", unsafe_allow_html=True)
+    with st.container(border=True):
+        render_panel_header("📡 LOCATION SHARE & STATUS BROADCASTER")
+        contact_options = [f"{c['Name']} ({c['Relation']})" for c in st.session_state.next_of_kin]
+        chosen_contact = st.selectbox("Active Target Relay", contact_options)
+        
+        maps_query_url = f"https://www.google.com/maps?q={user_lat},{user_lon}"
+        broadcast_msg = (
+            f"TACTICAL ALERT BROADCAST: Proximity tracking alert active. "
+            f"Nearest fire perimeter scan is {threat_val_string} away from target house asset. "
+            f"Pin coordinate trace: {maps_query_url}"
+        )
+        
+        encoded_payload = urllib.parse.quote(broadcast_msg)
+        whatsapp_comms_endpoint = f"https://api.whatsapp.com/send?text={encoded_payload}"
+        
+        st.markdown(f"""
+        <a href="{whatsapp_comms_endpoint}" target="_blank" class="btn-broadcast">🚀 SEND LOCATION & 'SAFE' STATUS TO {chosen_contact.upper()}</a>
+        """, unsafe_allow_html=True)
 
     # --- 8. Core Layout Placement: Download Module ---
     render_download_module(fire_points, closest_fire_dist, test_temp)
 
-
 # --- 9. Console Log Window ---
-st.markdown("""
-<div class="panel-box">
-    <div class="panel-header">
-        <h3 class="panel-title">💻 CONSOLE LOG MONITOR SYSTEM</h3>
-        <span class="panel-controls">🗕 🗖 🗙</span>
+with st.container(border=True):
+    render_panel_header("💻 CONSOLE LOG MONITOR SYSTEM")
+    ts = time.strftime("%H:%M:%S")
+    st.markdown(f"""
+    <div class="log-monitor">
+        <div class="log-line"><span class="log-ts">[{ts}]</span> <span style="color:#52a3ff;">NASA_API:</span> {api_log_status}.</div>
+        <div class="log-line"><span class="log-ts">[{ts}]</span> <span style="color:#52a3ff;">GPS:</span> Bounding box grid bounds compiled: {bbox_string}.</div>
+        <div class="log-line"><span class="log-ts">[{ts}]</span> <span style="color:#52a3ff;">CALC:</span> Nearest thermal sensor point calculated at distance value {threat_val_string}.</div>
+        <div class="log-line"><span class="log-ts">[{ts}]</span> <span class="log-warn;">SYS:</span> Safety trigger check active. Alert status evaluated.</div>
     </div>
-</div>
-""", unsafe_allow_html=True)
-
-ts = time.strftime("%H:%M:%S")
-st.markdown(f"""
-<div class="log-monitor">
-    <div class="log-line"><span class="log-ts">[{ts}:01]</span> <span style="color:#52a3ff;">NASA_API:</span> {api_log_status}.</div>
-    <div class="log-line"><span class="log-ts">[{ts}:04]</span> <span style="color:#52a3ff;">GPS:</span> Bounding box grid bounds compiled: {bbox_string}.</div>
-    <div class="log-line"><span class="log-ts">[{ts}:08]</span> <span style="color:#52a3ff;">CALC:</span> Nearest thermal sensor point calculated at distance value {threat_val_string}.</div>
-    <div class="log-line"><span class="log-ts">[{ts}:12]</span> <span class="log-warn;">SYS:</span> Safety trigger check active. Alert status evaluated.</div>
-</div>
-""", unsafe_allow_html=True)
+    """, unsafe_allow_html=True)

@@ -1,15 +1,25 @@
-import streamlit as st
-import streamlit.components.v1 as components
-import pandas as pd
-import numpy as np
+import os
+import io
 import time
 import json
-import urllib.parse
+import hmac
+import math
+import hashlib
+import secrets
+from datetime import datetime, timezone
+
+import pandas as pd
 import requests
-from io import StringIO
-import folium
-from streamlit_folium import st_folium
-from folium.plugins import HeatMap
+import streamlit as st
+import streamlit.components.v1 as components
+
+try:
+    import folium
+    from folium.plugins import HeatMap, Fullscreen
+    from streamlit_folium import st_folium
+    HAS_FOLIUM = True
+except ImportError:
+    HAS_FOLIUM = False
 
 try:
     from streamlit_js_eval import get_geolocation
@@ -17,1062 +27,1043 @@ try:
 except ImportError:
     HAS_JS_EVAL = False
 
-# --- 1. Global Page Setup ---
+try:
+    import serial
+    import serial.tools.list_ports
+    HAS_SERIAL = True
+except ImportError:
+    HAS_SERIAL = False
+
+try:
+    import qrcode
+    HAS_QR = True
+except ImportError:
+    HAS_QR = False
+
+
+# ==============================================================================
+# 1. PAGE CONFIG & TACTICAL DARK THEME
+# ==============================================================================
 st.set_page_config(
-    page_title="Tactical Command Matrix",
-    page_icon="📡",
+    page_title="TACTICAL COMMAND MATRIX // A.G.E.H.I.C. & PFR",
+    page_icon="🛡️",
     layout="wide",
-    initial_sidebar_state="collapsed"
+    initial_sidebar_state="expanded",
 )
 
-# --- 2. Cyberpunk UI Styling Engine ---
-st.markdown("""
+st.markdown(
+    """
     <style>
     .stApp {
-        background-color: #0b0f14;
-        color: #7fa483;
-        font-family: 'Consolas', 'Courier New', monospace;
+        background-color: #0b111a;
+        color: #e2e8f0;
     }
-    [data-testid="stVerticalBlockBorderWrapper"] {
-        background-color: #0d121a;
-        border: 1px solid #1f2d3d !important;
-        border-radius: 3px !important;
-        padding: 12px;
-        margin-bottom: 15px;
-    }
-    .tactical-header-container {
-        border-radius: 4px;
-        padding: 10px;
-        text-align: center;
-        margin-bottom: 6px;
-    }
-    .header-alert {
-        background-color: #210d0d;
-        border: 2px solid #ff4757;
-        box-shadow: 0 0 15px rgba(255, 71, 87, 0.25);
-    }
-    .header-warn {
-        background-color: #241a08;
-        border: 2px solid #ffa502;
-        box-shadow: 0 0 15px rgba(255, 165, 2, 0.25);
-    }
-    .header-nominal {
-        background-color: #0c1c12;
-        border: 2px solid #2ed573;
-        box-shadow: 0 0 15px rgba(46, 213, 115, 0.25);
-    }
-    .header-vip {
-        background-color: #1c1507;
-        border: 2px solid #ffa502;
-        box-shadow: 0 0 15px rgba(255, 165, 2, 0.25);
-    }
-    .tactical-title {
-        font-size: 20px !important;
-        font-weight: 800;
-        letter-spacing: 2px;
-        margin: 0 !important;
-    }
-    .sub-status-bar {
-        display: flex;
-        justify-content: space-between;
-        border-radius: 4px;
-        padding: 6px 15px;
-        margin-bottom: 16px;
-        font-size: 13px;
-        font-weight: bold;
-    }
-    .panel-header {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        border-bottom: 1px solid #1f2d3d;
-        padding-bottom: 6px;
+    .tactical-banner {
+        background: linear-gradient(90deg, #064e3b 0%, #0f172a 100%);
+        border: 1px solid #10b981;
+        border-radius: 6px;
+        padding: 10px 16px;
+        font-weight: 700;
+        font-size: 15px;
+        color: #ecfdf5;
         margin-bottom: 12px;
+        letter-spacing: 0.5px;
     }
-    .panel-title {
-        color: #52a3ff !important;
-        font-size: 11px !important;
-        font-weight: bold;
-        letter-spacing: 1px;
-        margin: 0 !important;
-    }
-    .panel-controls { color: #4b6584; font-size: 11px; }
-    .status-pill-container {
-        display: flex;
-        justify-content: space-between;
+    .tactical-card {
+        background-color: #111827;
+        border: 1px solid #1e293b;
+        border-radius: 8px;
+        padding: 12px 14px;
         margin-bottom: 10px;
     }
-    .status-pill {
-        background: #090d14;
-        border: 1px solid #16202c;
-        border-radius: 3px;
-        padding: 8px;
-        text-align: center;
-        width: 31%;
-    }
-    .pill-val { font-size: 15px; font-weight: bold; }
-    .w3w-badge {
-        background-color: #090d14;
-        border: 1px solid #2f3542;
-        border-left: 3px solid #ff4757;
-        padding: 6px 10px;
-        font-size: 12px;
-        color: #f1f2f6;
-        margin-bottom: 8px;
-        border-radius: 2px;
-    }
-    .btn-broadcast {
-        display: block;
-        background-color: #176565;
-        color: white !important;
-        font-weight: bold;
-        text-align: center;
-        padding: 12px;
-        border: 1px solid #52a3ff;
-        border-radius: 4px;
-        text-decoration: none !important;
-        font-size: 13px;
+    .card-header {
+        font-size: 11px;
+        font-weight: 700;
         text-transform: uppercase;
-        margin-top: 12px;
+        color: #94a3b8;
+        letter-spacing: 0.8px;
+        margin-bottom: 4px;
     }
-    .btn-broadcast:hover {
-        background-color: #00cbcb;
-        color: #0b0f14 !important;
-    }
-    .blackout-box {
+    .status-val-green { font-size: 22px; font-weight: 800; color: #10b981; }
+    .status-val-red { font-size: 22px; font-weight: 800; color: #ef4444; }
+    .status-val-cyan { font-size: 22px; font-weight: 800; color: #38bdf8; }
+    .stealth-hud {
         background-color: #000000;
-        border: 1px solid #ff1e1e;
-        color: #ff1e1e;
-        padding: 16px;
-        border-radius: 3px;
-        margin-bottom: 14px;
-    }
-    .blackout-title {
-        color: #ff1e1e;
-        font-size: 13px;
-        font-weight: bold;
-        letter-spacing: 2px;
-        border-bottom: 1px solid #660000;
-        padding-bottom: 6px;
-        margin-bottom: 10px;
-    }
-    .blackout-val {
-        color: #ff1e1e;
-        font-size: 20px;
-        font-weight: bold;
-    }
-    .btn-blackout-sos {
-        display: block;
-        background-color: #000000;
-        color: #ff1e1e !important;
-        border: 2px solid #ff1e1e;
-        font-weight: bold;
-        text-align: center;
-        padding: 14px;
-        text-decoration: none !important;
-        letter-spacing: 2px;
-        margin-top: 10px;
-    }
-    .btn-blackout-sos:hover {
-        background-color: #330000;
+        border: 1px solid #7f1d1d;
+        border-radius: 8px;
+        padding: 20px;
+        color: #f87171;
+        font-family: monospace;
     }
     </style>
-""", unsafe_allow_html=True)
+    """,
+    unsafe_allow_html=True,
+)
 
-# --- 3. Helper Functions & Safe Secret Loader ---
-def get_secret_safe(key_name, default_val):
-    try:
-        return st.secrets[key_name]
-    except Exception:
-        return default_val
 
-def haversine_distance(lat1, lon1, lat2, lon2):
-    R = 6371.0
-    p = np.pi / 180
-    a = (
-        0.5
-        - np.cos((lat2 - lat1) * p) / 2
-        + np.cos(lat1 * p) * np.cos(lat2 * p) * (1 - np.cos((lon2 - lon1) * p)) / 2
-    )
-    return 2 * R * np.arcsin(np.sqrt(a))
+# ==============================================================================
+# 2. SESSION STATE INITIALIZATION
+# ==============================================================================
+ARDUINO_HMAC_KEY = b"AGEHIC_9910_HMAC_KEY_CHANGE_ME"
 
-def get_what3words(lat, lon, api_key=""):
-    if api_key.strip():
-        try:
-            url = f"https://api.what3words.com/v3/convert-to-3wa?coordinates={lat},{lon}&key={api_key.strip()}"
-            res = requests.get(url, timeout=5)
-            if res.status_code == 200 and "words" in res.json():
-                return f"///{res.json()['words']}"
-        except Exception:
-            pass
-    words_a = ["beacon", "harlow", "shield", "vector", "radar", "summit", "cedar", "granite"]
-    words_b = ["watch", "ember", "river", "guard", "sector", "signal", "anchor", "pulse"]
-    words_c = ["north", "matrix", "relay", "safe", "point", "haven", "orbit", "crest"]
-    idx1 = abs(int(round(lat * 37000))) % len(words_a)
-    idx2 = abs(int(round(lon * 37000))) % len(words_b)
-    idx3 = abs(int(round((lat + lon) * 37000))) % len(words_c)
-    return f"///{words_a[idx1]}.{words_b[idx2]}.{words_c[idx3]}"
+if "properties" not in st.session_state:
+    st.session_state.properties = [
+        {"name": "Primary Residence (Harlow HQ)", "lat": 51.7765, "lon": 0.1066, "postcode": "CM20 1AA"}
+    ]
 
-def render_panel_header(title_text):
-    st.markdown(f"""
-        <div class="panel-header">
-            <h3 class="panel-title">{title_text}</h3>
-            <span class="panel-controls">🗕 🗖 🗙</span>
-        </div>
-    """, unsafe_allow_html=True)
+if "op_coords" not in st.session_state:
+    st.session_state.op_coords = {"lat": 51.7765, "lon": 0.1066, "source": "DEFAULT"}
 
-def default_property_hardware():
-    return {
-        "sprinkler_armed": False,
-        "target_psi": 85,
-        "flood_barrier_deployed": False,
-        "sump_pump_active": True,
-        "flow_rate": 450,
-        "deadbolts_locked": True,
-        "perimeter_sensors": True,
-        "cctv_active": True,
-        "shutters_locked": False
+if "gps_trail" not in st.session_state:
+    st.session_state.gps_trail = []
+
+if "nok_tracking_active" not in st.session_state:
+    st.session_state.nok_tracking_active = False
+
+if "nok_session_token" not in st.session_state:
+    st.session_state.nok_session_token = f"TRK-{secrets.token_hex(3).upper()}"
+
+if "nok_webhook_url" not in st.session_state:
+    st.session_state.nok_webhook_url = ""
+
+if "last_webhook_push" not in st.session_state:
+    st.session_state.last_webhook_push = 0.0
+
+if "contacts" not in st.session_state:
+    st.session_state.contacts = [
+        {"name": "Primary Next of Kin", "phone": "+447700900001", "role": "Family / Emergency"}
+    ]
+
+if "pro_unlocked" not in st.session_state:
+    st.session_state.pro_unlocked = False
+if "vip_unlocked" not in st.session_state:
+    st.session_state.vip_unlocked = False
+if "vip_safety_armed" not in st.session_state:
+    st.session_state.vip_safety_armed = False
+if "vip_last_active" not in st.session_state:
+    st.session_state.vip_last_active = time.time()
+if "pin_attempts" not in st.session_state:
+    st.session_state.pin_attempts = 0
+if "security_log" not in st.session_state:
+    st.session_state.security_log = []
+
+if "arduino_port" not in st.session_state:
+    st.session_state.arduino_port = "NONE"
+if "arduino_conn" not in st.session_state:
+    st.session_state.arduino_conn = None
+if "arduino_telemetry" not in st.session_state:
+    st.session_state.arduino_telemetry = {}
+if "last_synced_cmds" not in st.session_state:
+    st.session_state.last_synced_cmds = {}
+if "last_ping_sent" not in st.session_state:
+    st.session_state.last_ping_sent = 0.0
+
+if "hw" not in st.session_state:
+    st.session_state.hw = {
+        "master_shutdown": False,
+        "agehic_pump_mode": "AUTO (FIRMS / THERMAL)",
+        "pulse_cycle": "FULL ON (100%)",
+        "zone1_ridge": False,
+        "zone2_eaves": False,
+        "zone3_perim": False,
+        "intake_valve": True,
+        "thermogal_inject": False,
+        "thermogal_mode": "AUTO-THERMAL (65°C)",
+        "thermogal_valve_deployed": False,
+        "thermogal_tank_litres": 200,
+        "ac_breaker_cut": False,
+        "barrier_mode": "AUTO-BUOYANCY",
+        "barrier_front": False,
+        "barrier_rear": False,
+        "barrier_garage": False,
+        "airbricks_sealed": False,
+        "sewer_valve_locked": False,
+        "letterbox_sealed": False,
+        "sump_mode": "AUTO (FLOAT)",
+        "sump_pit_mm": 120,
+        "cistern_litres": 9400,
+        "ambient_temp_c": 22,
+        "vault_temp_c": 20,
+        "peltier_cooler_on": True,
+        "micromist_cooling_on": False,
+        "batt_a_pct": 98,
+        "batt_b_pct": 97,
+        "batt_a_fuse_ok": True,
+        "batt_b_fuse_ok": True,
     }
 
-@st.cache_data(ttl=300, show_spinner=False)
-def scan_location_hazards(lat, lon, scan_radius_km, firms_api_key):
-    # 1. Fire scan (NASA FIRMS Global VIIRS)
-    fires = []
-    nearest_fire = float('inf')
-    lat_delta = scan_radius_km / 111.0
-    cos_lat = max(np.cos(np.radians(lat)), 0.0001)
-    lon_delta = scan_radius_km / (111.0 * cos_lat)
-    bbox = f"{lon - lon_delta:.4f},{lat - lat_delta:.4f},{lon + lon_delta:.4f},{lat + lat_delta:.4f}"
-    firms_url = f"https://firms.modaps.eosdis.nasa.gov/api/area/csv/{firms_api_key}/VIIRS_SNPP_NRT/{bbox}/1"
 
+# ==============================================================================
+# 3. HELPER FUNCTIONS (GEOCODING, GPS TRAIL, QR, HAZARDS & ARDUINO BRIDGE)
+# ==============================================================================
+def log_security_event(msg: str):
+    ts = datetime.now(timezone.utc).strftime("%H:%M:%S UTC")
+    st.session_state.security_log.insert(0, f"[{ts}] {msg}")
+    st.session_state.security_log = st.session_state.security_log[:50]
+
+
+def record_operator_position(lat: float, lon: float):
+    trail = st.session_state.gps_trail
+    if not trail or abs(trail[-1]["lat"] - lat) > 0.00005 or abs(trail[-1]["lon"] - lon) > 0.00005:
+        trail.append({
+            "lat": round(lat, 6),
+            "lon": round(lon, 6),
+            "ts": datetime.now(timezone.utc).strftime("%H:%M:%S UTC"),
+        })
+        st.session_state.gps_trail = trail[-50:]
+
+
+def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    r = 6371.0
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dp = math.radians(lat2 - lat1)
+    dl = math.radians(lon2 - lon1)
+    a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
+    return 2 * r * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+
+def compass_bearing(lat1: float, lon1: float, lat2: float, lon2: float) -> str:
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dl = math.radians(lon2 - lon1)
+    y = math.sin(dl) * math.cos(p2)
+    x = math.cos(p1) * math.sin(p2) - math.sin(p1) * math.cos(p2) * math.cos(dl)
+    brng = (math.degrees(math.atan2(y, x)) + 360) % 360
+    dirs = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
+    return dirs[round(brng / 45) % 8]
+
+
+def to_w3w_hash(lat: float, lon: float) -> str:
+    words_a = ["shield", "beacon", "harbour", "summit", "cedar", "granite", "anchor", "falcon"]
+    words_b = ["ridge", "stream", "ember", "watch", "crest", "valley", "bridge", "forge"]
+    words_c = ["north", "spark", "river", "stone", "flame", "haven", "tower", "pulse"]
+    h = hashlib.sha256(f"{lat:.5f},{lon:.5f}".encode()).digest()
+    return f"///{words_a[h[0] % 8]}.{words_b[h[1] % 8]}.{words_c[h[2] % 8]}"
+
+
+@st.cache_data(ttl=3600)
+def geocode_postcode_or_address(query: str):
     try:
-        res = requests.get(firms_url, timeout=6)
-        if res.status_code == 200 and "latitude" in res.text:
-            df_fires = pd.read_csv(StringIO(res.text))
-            for _, row in df_fires.iterrows():
-                f_lat, f_lon = float(row['latitude']), float(row['longitude'])
-                dist = haversine_distance(lat, lon, f_lat, f_lon)
-                if dist <= scan_radius_km:
-                    fires.append([f_lat, f_lon, float(row.get('frp', 1.0))])
-                    nearest_fire = min(nearest_fire, dist)
-        else:
-            raise ValueError("Fallback")
-    except Exception:
-        for lat_off, lon_off in [[0.018, -0.020], [-0.015, 0.025]]:
-            f_lat, f_lon = lat + lat_off, lon + lon_off
-            dist = haversine_distance(lat, lon, f_lat, f_lon)
-            if dist <= scan_radius_km:
-                fires.append([f_lat, f_lon, 15.0])
-                nearest_fire = min(nearest_fire, dist)
-
-    # 2. Flood scan (UK Environment Agency Severity 1-3 + Open-Meteo Copernicus GloFAS)
-    ea_items = []
-    source_label = "Copernicus GloFAS (Europe / Global)"
-    is_england = (49.8 <= lat <= 55.9) and (-6.5 <= lon <= 2.1)
-    if is_england:
-        try:
-            ea_url = f"https://environment.data.gov.uk/flood-monitoring/id/floods?lat={lat}&long={lon}&dist={int(scan_radius_km)}"
-            ea_res = requests.get(ea_url, timeout=6)
-            if ea_res.status_code == 200:
-                raw_items = ea_res.json().get("items", [])
-                for item in raw_items:
-                    sev_raw = item.get("severityLevel", 3)
-                    try:
-                        sev_int = int(sev_raw)
-                    except (ValueError, TypeError):
-                        sev_int = 3
-                    if sev_int in (1, 2, 3):
-                        item["parsed_severity"] = sev_int
-                        ea_items.append(item)
-                source_label = "UK Environment Agency + Copernicus GloFAS"
-        except Exception:
-            pass
-
-    peak_discharge = None
-    mean_discharge = None
-    surge_ratio = None
-    try:
-        om_url = (
-            f"https://flood-api.open-meteo.com/v1/flood?"
-            f"latitude={lat}&longitude={lon}&daily=river_discharge,river_discharge_mean&forecast_days=3"
+        r = requests.get(
+            "https://nominatim.openstreetmap.org/search",
+            params={"q": query, "format": "json", "limit": 1},
+            headers={"User-Agent": "AGEHIC-Command-Matrix/1.0"},
+            timeout=6,
         )
-        om_res = requests.get(om_url, timeout=6)
-        if om_res.status_code == 200:
-            daily = om_res.json().get("daily", {})
-            d_vals = [float(x) for x in daily.get("river_discharge", []) if x is not None]
-            m_vals = [float(x) for x in daily.get("river_discharge_mean", []) if x is not None]
-            if d_vals:
-                peak_discharge = max(d_vals)
-            if m_vals and max(m_vals) > 0:
-                mean_discharge = max(m_vals)
-            if peak_discharge is not None and mean_discharge is not None and mean_discharge > 0:
-                surge_ratio = peak_discharge / mean_discharge
+        data = r.json()
+        if data:
+            return {
+                "lat": round(float(data[0]["lat"]), 6),
+                "lon": round(float(data[0]["lon"]), 6),
+                "label": data[0].get("display_name", query).split(",")[0].strip(),
+            }
+    except Exception:
+        pass
+    return None
+
+
+@st.cache_data(ttl=600)
+def reverse_geocode_place(lat: float, lon: float) -> str:
+    try:
+        r = requests.get(
+            "https://nominatim.openstreetmap.org/reverse",
+            params={"lat": round(lat, 4), "lon": round(lon, 4), "format": "json"},
+            headers={"User-Agent": "AGEHIC-Command-Matrix/1.0"},
+            timeout=5,
+        )
+        addr = r.json().get("address", {})
+        place = addr.get("town") or addr.get("city") or addr.get("village") or addr.get("suburb") or addr.get("county")
+        if place:
+            return str(place).upper()
+    except Exception:
+        pass
+    return "LOCAL SECTOR"
+
+
+def generate_qr_png(payload: str):
+    if not HAS_QR:
+        return None
+    qr = qrcode.QRCode(version=1, box_size=8, border=2)
+    qr.add_data(payload)
+    qr.make(fit=True)
+    img = qr.make_image(fill_color="#0f172a", back_color="#ffffff")
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def push_nok_webhook_update(active_prop: dict, hazards: dict):
+    url = st.session_state.nok_webhook_url.strip()
+    if not url or not st.session_state.nok_tracking_active:
+        return
+    now = time.time()
+    if now - st.session_state.last_webhook_push < 10.0:
+        return
+    st.session_state.last_webhook_push = now
+    payload = {
+        "token": st.session_state.nok_session_token,
+        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+        "operator_lat": st.session_state.op_coords["lat"],
+        "operator_lon": st.session_state.op_coords["lon"],
+        "property": active_prop["name"],
+        "fires_detected": len(hazards.get("fires", [])),
+        "river_surge": hazards.get("river_surge", 1.0),
+        "maps_url": f"https://maps.google.com/?q={st.session_state.op_coords['lat']:.6f},{st.session_state.op_coords['lon']:.6f}",
+    }
+    try:
+        requests.post(url, json=payload, timeout=3)
     except Exception:
         pass
 
-    return {
-        "fires": fires,
-        "nearest_fire": nearest_fire,
-        "ea_items": ea_items,
-        "peak_discharge": peak_discharge,
-        "mean_discharge": mean_discharge,
-        "surge_ratio": surge_ratio,
-        "source_label": source_label
-    }
 
-# --- 4. Initialize Session States ---
-MAX_LOCATIONS = 5
+@st.cache_data(ttl=300)
+def scan_location_hazards(lat: float, lon: float, radius_km: float, firms_key: str, simulate: bool):
+    fires = []
+    ea_floods = []
+    river_surge = 1.0
 
-if "properties" not in st.session_state:
-    st.session_state.properties = {
-        "Primary Residence (Harlow, UK)": {"lat": 51.7729, "lon": 0.1023},
-        "European Villa (Athens, GR)": {"lat": 37.9838, "lon": 23.7275}
-    }
-if "active_property" not in st.session_state:
-    st.session_state.active_property = "Primary Residence (Harlow, UK)"
-if "property_hardware" not in st.session_state:
-    st.session_state.property_hardware = {
-        name: default_property_hardware() for name in st.session_state.properties
-    }
-if "auth_tier" not in st.session_state:
-    st.session_state.auth_tier = "FREE"
-if "failed_attempts" not in st.session_state:
-    st.session_state.failed_attempts = 0
-if "lockout_until" not in st.session_state:
-    st.session_state.lockout_until = 0.0
-if "security_logs" not in st.session_state:
-    st.session_state.security_logs = ["[SYS] Multi-property security matrix initialized."]
-if "user_lat" not in st.session_state:
-    st.session_state.user_lat = 51.7729
-if "user_lon" not in st.session_state:
-    st.session_state.user_lon = 0.1023
-if "next_of_kin" not in st.session_state:
-    st.session_state.next_of_kin = [
-        {"Name": "John Smith", "Relation": "Primary Safety Relay", "Contact": "+447700900077"}
-    ]
-if "fire_alert_km" not in st.session_state:
-    st.session_state.fire_alert_km = 10.0
-if "discharge_ratio_threshold" not in st.session_state:
-    st.session_state.discharge_ratio_threshold = 2.5
-if "ping_level_3" not in st.session_state:
-    st.session_state.ping_level_3 = False
-if "enable_browser_ping" not in st.session_state:
-    st.session_state.enable_browser_ping = True
-if "last_alert_signature" not in st.session_state:
-    st.session_state.last_alert_signature = ""
+    if simulate:
+        fires = [
+            {"lat": round(lat + 0.018, 5), "lon": round(lon + 0.022, 5), "frp": 42.5, "dist": round(haversine_km(lat, lon, lat + 0.018, lon + 0.022), 2)},
+            {"lat": round(lat - 0.014, 5), "lon": round(lon + 0.015, 5), "frp": 28.0, "dist": round(haversine_km(lat, lon, lat - 0.014, lon + 0.015), 2)},
+        ]
+        ea_floods = [{"area": "River Stort Lower Floodplain (SIMULATED)", "severity": 2, "lat": lat + 0.009, "lon": lon - 0.011}]
+        return {"fires": fires, "ea_floods": ea_floods, "river_surge": 2.15}
 
-# --- 5. Command Console: Multi-Property & Alert Settings ---
-with st.expander("🛠️ COMMAND CONSOLE: SAVED LOCATIONS (MAX 5), GEOTAG & ALERT THRESHOLDS", expanded=True):
-    prop_names = list(st.session_state.properties.keys())
-    if st.session_state.active_property not in prop_names:
-        st.session_state.active_property = prop_names[0]
+    if firms_key and firms_key.strip() != "DEMO_KEY":
+        try:
+            delta = 0.35
+            bbox = f"{lon - delta:.4f},{lat - delta:.4f},{lon + delta:.4f},{lat + delta:.4f}"
+            url = f"https://firms.modaps.eosdis.nasa.gov/api/area/csv/{firms_key.strip()}/VIIRS_SNPP_NRT/{bbox}/1"
+            df = pd.read_csv(url)
+            for _, row in df.iterrows():
+                flat, flon = float(row["latitude"]), float(row["longitude"])
+                d = haversine_km(lat, lon, flat, flon)
+                if d <= radius_km:
+                    fires.append({"lat": flat, "lon": flon, "frp": float(row.get("frp", 10.0)), "dist": round(d, 2)})
+        except Exception:
+            pass
 
-    prop_col1, prop_col2 = st.columns([3, 1])
-    with prop_col1:
-        selected_prop = st.selectbox(
-            f"🏠 ACTIVE PROPERTY / FAVORITE LOCATION ({len(prop_names)}/{MAX_LOCATIONS} SLOTS USED)",
-            prop_names,
-            index=prop_names.index(st.session_state.active_property)
+    try:
+        r_ea = requests.get(
+            "https://environment.data.gov.uk/flood-monitoring/id/floods",
+            params={"lat": lat, "long": lon, "dist": 15},
+            timeout=6,
         )
-        st.session_state.active_property = selected_prop
+        for item in r_ea.json().get("items", []):
+            sev = int(item.get("severityLevel", 4))
+            if sev <= 3:
+                flood_area = item.get("floodArea", {})
+                ea_floods.append({
+                    "area": item.get("eaAreaName", "EA Flood Zone"),
+                    "severity": sev,
+                    "lat": flood_area.get("lat"),
+                    "lon": flood_area.get("long"),
+                })
+    except Exception:
+        pass
 
-    with prop_col2:
-        st.markdown("<div style='margin-top: 28px;'></div>", unsafe_allow_html=True)
-        if len(prop_names) > 1:
-            if st.button("🗑️ REMOVE SELECTED", width="stretch"):
-                del st.session_state.properties[selected_prop]
-                st.session_state.property_hardware.pop(selected_prop, None)
-                st.session_state.active_property = list(st.session_state.properties.keys())[0]
-                st.rerun()
-
-    if len(prop_names) < MAX_LOCATIONS:
-        with st.form("add_property_form", clear_on_submit=True):
-            st.markdown(f"**➕ ADD HOME OR FAVORITE LOCATION ({MAX_LOCATIONS - len(prop_names)} SLOTS REMAINING)**")
-            ap_c1, ap_c2, ap_c3, ap_c4 = st.columns([2, 1, 1, 1])
-            with ap_c1:
-                new_prop_name = st.text_input("Location Label (e.g., Holiday Home Paris)")
-            with ap_c2:
-                new_prop_lat = st.number_input("Latitude", value=48.8566, format="%.4f")
-            with ap_c3:
-                new_prop_lon = st.number_input("Longitude", value=2.3522, format="%.4f")
-            with ap_c4:
-                st.markdown("<div style='margin-top: 28px;'></div>", unsafe_allow_html=True)
-                add_prop_btn = st.form_submit_button("SAVE LOCATION", width="stretch")
-
-            if add_prop_btn and new_prop_name.strip():
-                clean_name = new_prop_name.strip()
-                if clean_name in st.session_state.properties:
-                    st.warning("A location with that name already exists.")
-                else:
-                    st.session_state.properties[clean_name] = {
-                        "lat": float(new_prop_lat),
-                        "lon": float(new_prop_lon)
-                    }
-                    st.session_state.property_hardware[clean_name] = default_property_hardware()
-                    st.session_state.active_property = clean_name
-                    st.toast(f"Saved location: {clean_name}", icon="📍")
-                    st.rerun()
-    else:
-        st.info(f"Maximum of {MAX_LOCATIONS} saved locations reached. Remove a slot above to add a new location.")
-
-    st.markdown("---")
-    al_c1, al_c2, al_c3 = st.columns(3)
-    with al_c1:
-        st.session_state.fire_alert_km = st.slider(
-            "🔥 Fire Proximity Alert Radius (KM)", 2.0, 50.0, float(st.session_state.fire_alert_km)
+    try:
+        r_riv = requests.get(
+            "https://flood-api.open-meteo.com/v1/flood",
+            params={"latitude": lat, "longitude": lon, "daily": "river_discharge", "forecast_days": 2},
+            timeout=6,
         )
-    with al_c2:
-        st.session_state.discharge_ratio_threshold = st.slider(
-            "🌊 GloFAS River Surge Alert Ratio (× Mean)", 1.5, 5.0, float(st.session_state.discharge_ratio_threshold), 0.1
-        )
-    with al_c3:
-        st.session_state.enable_browser_ping = st.toggle(
-            "🔔 Browser Sound & Desktop Push Ping",
-            value=st.session_state.enable_browser_ping
-        )
-        st.session_state.ping_level_3 = st.checkbox(
-            "Also ping for early UK Level 3 Flood Alerts",
-            value=st.session_state.ping_level_3
-        )
+        vals = r_riv.json().get("daily", {}).get("river_discharge", [])
+        vals = [v for v in vals if v is not None and v > 0]
+        if len(vals) >= 2:
+            river_surge = round(max(vals) / max(0.1, vals[0]), 2)
+    except Exception:
+        pass
 
-    st.markdown("---")
-    api_col1, api_col2, api_col3 = st.columns(3)
-    with api_col1:
-        firms_api_key = st.text_input("NASA FIRMS MAP_KEY (Global)", value="DEMO_KEY", type="password")
-    with api_col2:
-        w3w_api_key = st.text_input("what3words API Key (Optional)", value="", type="password")
-    with api_col3:
-        scan_radius_km = st.slider("Radar Scan Radius (KM)", 5.0, 100.0, 30.0)
+    return {"fires": fires, "ea_floods": ea_floods, "river_surge": river_surge}
 
-    st.markdown("---")
-    geo_col1, geo_col2 = st.columns(2)
-    current_prop_data = st.session_state.properties[selected_prop]
-    with geo_col1:
-        st.markdown(f"**🏡 {selected_prop.upper()} GEOTAG**")
-        house_lat = st.number_input("Location Latitude", value=float(current_prop_data["lat"]), format="%.4f", key=f"lat_{selected_prop}")
-        house_lon = st.number_input("Location Longitude", value=float(current_prop_data["lon"]), format="%.4f", key=f"lon_{selected_prop}")
-        st.session_state.properties[selected_prop]["lat"] = house_lat
-        st.session_state.properties[selected_prop]["lon"] = house_lon
 
-    with geo_col2:
-        st.markdown("**🏃 USER / OPERATOR AUTO-GEOTAG**")
-        if HAS_JS_EVAL:
-            loc = get_geolocation()
-            if loc and "coords" in loc:
-                st.session_state.user_lat = round(float(loc["coords"]["latitude"]), 5)
-                st.session_state.user_lon = round(float(loc["coords"]["longitude"]), 5)
-        user_lat = st.number_input("User Latitude (Auto/Override)", key="user_lat", format="%.5f")
-        user_lon = st.number_input("User Longitude (Auto/Override)", key="user_lon", format="%.5f")
-
-house_w3w = get_what3words(house_lat, house_lon, w3w_api_key)
-user_w3w = get_what3words(user_lat, user_lon, w3w_api_key)
-separation_dist = haversine_distance(house_lat, house_lon, user_lat, user_lon)
-hw_state = st.session_state.property_hardware[selected_prop]
-
-# --- 6. Multi-Location & User Proximity Threat Evaluation ---
-active_hazards = scan_location_hazards(house_lat, house_lon, scan_radius_km, firms_api_key)
-user_hazards = scan_location_hazards(user_lat, user_lon, scan_radius_km, firms_api_key)
-
-active_alerts = []
-passive_advisories = []
-threat_matrix_rows = []
-
-locations_to_audit = [("Current User (Operator GPS)", user_lat, user_lon, user_hazards)]
-for p_name, p_info in st.session_state.properties.items():
-    if p_name == selected_prop:
-        loc_haz = active_hazards
-    else:
-        loc_haz = scan_location_hazards(p_info["lat"], p_info["lon"], scan_radius_km, firms_api_key)
-    locations_to_audit.append((p_name, p_info["lat"], p_info["lon"], loc_haz))
-
-for label, lat_v, lon_v, haz in locations_to_audit:
-    reasons = []
-    advisory_notes = []
-
-    if haz["nearest_fire"] <= st.session_state.fire_alert_km:
-        reasons.append(f"🔥 Fire {haz['nearest_fire']:.2f} KM away")
-
-    for item in haz["ea_items"]:
-        sev = item.get("parsed_severity", 3)
-        desc = item.get("description", "Flood Zone")
-        if sev == 1:
-            reasons.append(f"🚨 SEVERE FLOOD WARNING (Level 1 - Life Threat): {desc}")
-        elif sev == 2:
-            reasons.append(f"🌊 FLOOD WARNING (Level 2 - Action Required): {desc}")
-        elif sev == 3:
-            if st.session_state.ping_level_3:
-                reasons.append(f"⚠️ Flood Alert (Level 3): {desc}")
-            else:
-                advisory_notes.append(f"Level 3 Flood Alert: {desc}")
-
-    if haz["surge_ratio"] is not None and haz["surge_ratio"] >= st.session_state.discharge_ratio_threshold:
-        reasons.append(f"🌊 River Surge {haz['surge_ratio']:.1f}× normal ({haz['peak_discharge']:.1f} m³/s)")
-
-    if reasons:
-        active_alerts.append(f"{label}: " + " | ".join(reasons))
-    if advisory_notes:
-        passive_advisories.append(f"{label}: " + " | ".join(advisory_notes))
-
-    f_col_txt = f"{haz['nearest_fire']:.2f} KM" if haz["nearest_fire"] != float('inf') else "Clear"
-    if haz["surge_ratio"] is not None:
-        r_col_txt = f"{haz['peak_discharge']:.1f} m³/s ({haz['surge_ratio']:.1f}×)"
-    elif haz["peak_discharge"] is not None:
-        r_col_txt = f"{haz['peak_discharge']:.1f} m³/s"
-    else:
-        r_col_txt = "N/A"
-
-    if reasons:
-        status_badge = "🚨 DANGER"
-    elif advisory_notes:
-        status_badge = "⚠️ LEVEL 3 WATCH"
-    else:
-        status_badge = "🟢 CLEAR"
-
-    threat_matrix_rows.append({
-        "Monitored Target": label,
-        "Status": status_badge,
-        "Nearest Fire": f_col_txt,
-        "GloFAS River Flow": r_col_txt,
-        "UK EA Warnings": len(haz["ea_items"])
-    })
-
-# Global Top-Level Danger Notification Banner & Browser Ping
-if active_alerts:
-    joined_alerts = " • ".join(active_alerts)
-    st.markdown(f"""
-    <div class="tactical-header-container header-alert" style="margin-bottom: 14px;">
-        <h2 class="tactical-title" style="color: #ff4757;">🚨 PROXIMITY DANGER ALERT: THREAT DETECTED NEAR MONITORED TARGET</h2>
-        <p style="color: #ffcccc; font-size: 13px; margin: 6px 0 0 0; font-weight: bold;">{joined_alerts}</p>
-    </div>
-    """, unsafe_allow_html=True)
-
-    alert_sig = "|".join(active_alerts)
-    if alert_sig != st.session_state.last_alert_signature:
-        st.session_state.last_alert_signature = alert_sig
-        st.toast(f"🚨 DANGER ALERT: {active_alerts[0]}", icon="🚨")
-        if st.session_state.enable_browser_ping:
-            safe_ping_msg = json.dumps(active_alerts[0])
-            components.html(f"""
-                <script>
-                (function() {{
-                    try {{
-                        const ctx = new (window.AudioContext || window.webkitAudioContext)();
-                        const osc = ctx.createOscillator();
-                        const gain = ctx.createGain();
-                        osc.type = 'sawtooth';
-                        osc.frequency.setValueAtTime(880, ctx.currentTime);
-                        gain.gain.setValueAtTime(0.15, ctx.currentTime);
-                        osc.connect(gain);
-                        gain.connect(ctx.destination);
-                        osc.start();
-                        osc.stop(ctx.currentTime + 0.35);
-                    }} catch(e) {{}}
-                    if ("Notification" in window) {{
-                        if (Notification.permission === "granted") {{
-                            new Notification("🚨 TACTICAL DANGER ALERT", {{ body: {safe_ping_msg} }});
-                        }} else if (Notification.permission !== "denied") {{
-                            Notification.requestPermission().then(function(perm) {{
-                                if (perm === "granted") {{
-                                    new Notification("🚨 TACTICAL DANGER ALERT", {{ body: {safe_ping_msg} }});
-                                }}
-                            }});
-                        }}
-                    }}
-                }})();
-                </script>
-            """, height=0)
-elif passive_advisories:
-    joined_adv = " • ".join(passive_advisories)
-    st.markdown(f"""
-    <div class="tactical-header-container header-warn" style="margin-bottom: 14px;">
-        <h2 class="tactical-title" style="color: #ffa502;">⚠️ FLOOD ALERT ADVISORY (SEVERITY LEVEL 3 — BE PREPARED)</h2>
-        <p style="color: #ffeaa7; font-size: 12px; margin: 6px 0 0 0;">{joined_adv}</p>
-    </div>
-    """, unsafe_allow_html=True)
-
-fire_points = active_hazards["fires"]
-closest_fire_dist = active_hazards["nearest_fire"]
-flood_warnings = active_hazards["ea_items"]
-river_discharge_peak = active_hazards["peak_discharge"]
-surge_ratio_active = active_hazards["surge_ratio"]
-flood_source_label = active_hazards["source_label"]
-
-fire_threat_str = f"{closest_fire_dist:.2f} KM" if closest_fire_dist != float('inf') else "CLEAR"
-flood_count = len(flood_warnings)
-discharge_str = f"{river_discharge_peak:.1f} m³/s" if river_discharge_peak is not None else "N/A"
-ratio_str = f"{surge_ratio_active:.1f}× mean" if surge_ratio_active is not None else "Baseline N/A"
-
-# --- 7. Five-Tab Command Navigation (Home Defence Far Right) ---
-tab_fire, tab_flood, tab_blackout, tab_relays, tab_defence = st.tabs([
-    "🔥 FIRE COMMAND",
-    "🌊 FLOOD COMMAND",
-    "⬛ BLACKOUT STEALTH OPS",
-    "👥 EMERGENCY RELAYS",
-    "🛡️ HOME DEFENCE (VIP)"
-])
-
-# ==========================================
-# TAB 1: FIRE COMMAND MATRIX
-# ==========================================
-with tab_fire:
-    is_fire_breach = len(fire_points) > 0 and closest_fire_dist <= st.session_state.fire_alert_km
-    if is_fire_breach:
-        st.markdown(f"""
-        <div class="tactical-header-container header-alert">
-            <h1 class="tactical-title" style="color: #ff4757;">FIRE BREACH DETECTED: {selected_prop.upper()}</h1>
-        </div>
-        <div class="sub-status-bar" style="background-color: #170a0a; border: 1px solid #7c1a1a;">
-            <span style="color: #ff4757;">⚠️ NEAREST THERMAL HOTSPOT: {fire_threat_str}</span>
-            <span style="color: #ff4757;">ASSET W3W: {house_w3w}</span>
-        </div>
-        """, unsafe_allow_html=True)
-    else:
-        st.markdown(f"""
-        <div class="tactical-header-container header-nominal">
-            <h1 class="tactical-title" style="color: #2ed573;">FIRE MATRIX NOMINAL: {selected_prop.upper()}</h1>
-        </div>
-        <div class="sub-status-bar" style="background-color: #0a170f; border: 1px solid #1a7c3e;">
-            <span style="color: #2ed573;">🟢 GLOBAL VIIRS SATELLITE: {fire_threat_str}</span>
-            <span style="color: #2ed573;">ASSET W3W: {house_w3w}</span>
-        </div>
-        """, unsafe_allow_html=True)
-
-    f_col1, f_col2 = st.columns(2)
-    with f_col1:
-        with st.container(border=True):
-            render_panel_header(f"📡 SATELLITE THERMAL RADAR — {len(st.session_state.properties)} SAVED LOCATIONS")
-            m_fire = folium.Map(
-                location=[house_lat, house_lon],
-                zoom_start=11,
-                tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
-                attr="Esri"
-            )
-            if fire_points:
-                heatmap_coords = [[float(pt[0]), float(pt[1]), float(pt[2])] for pt in fire_points]
-                HeatMap(data=heatmap_coords, radius=25, blur=15).add_to(m_fire)
-
-            for p_name, p_info in st.session_state.properties.items():
-                p_w3w = get_what3words(p_info["lat"], p_info["lon"], w3w_api_key)
-                if p_name == selected_prop:
-                    folium.Marker(
-                        [p_info["lat"], p_info["lon"]],
-                        popup=f"🏡 ACTIVE: {p_name} ({p_w3w})",
-                        tooltip=f"🏡 {p_name}",
-                        icon=folium.Icon(color="red", icon="home")
-                    ).add_to(m_fire)
-                else:
-                    folium.Marker(
-                        [p_info["lat"], p_info["lon"]],
-                        popup=f"⭐ FAVORITE: {p_name} ({p_w3w})",
-                        tooltip=f"⭐ {p_name}",
-                        icon=folium.Icon(color="orange", icon="star")
-                    ).add_to(m_fire)
-
-            folium.Marker(
-                [user_lat, user_lon],
-                popup=f"🏃 OPERATOR GPS ({user_w3w})",
-                tooltip="🏃 Current User GPS",
-                icon=folium.Icon(color="blue", icon="user")
-            ).add_to(m_fire)
-            st_folium(m_fire, width=650, height=340, key="fire_map")
-
-    with f_col2:
-        with st.container(border=True):
-            render_panel_header("📊 FIRE TELEMETRY & LIVE PROXIMITY THREAT MATRIX")
-            st.markdown(f"""
-            <div class="status-pill-container">
-                <div class="status-pill"><div style="font-size:10px; color:#8b949e;">ACTIVE HOTSPOTS</div><div class="pill-val" style="color:#ff9f43;">{len(fire_points)}</div></div>
-                <div class="status-pill"><div style="font-size:10px; color:#8b949e;">FIRE DISTANCE</div><div class="pill-val" style="color:#ff4757;">{fire_threat_str}</div></div>
-                <div class="status-pill"><div style="font-size:10px; color:#8b949e;">USER SEPARATION</div><div class="pill-val" style="color:#52a3ff;">{separation_dist:.2f} KM</div></div>
-            </div>
-            <div class="w3w-badge">🏡 <b>{selected_prop}:</b> {house_w3w} ({house_lat:.4f}, {house_lon:.4f})</div>
-            <div class="w3w-badge">🏃 <b>OPERATOR GPS:</b> {user_w3w} ({user_lat:.5f}, {user_lon:.5f})</div>
-            """, unsafe_allow_html=True)
-
-            st.dataframe(pd.DataFrame(threat_matrix_rows), hide_index=True, width="stretch")
-
-        with st.container(border=True):
-            render_panel_header("📡 FIRE EMERGENCY BROADCASTER")
-            contact_opts = [f"{c['Name']} ({c['Relation']})" for c in st.session_state.next_of_kin] or ["No Contacts Logged"]
-            chosen_fire_contact = st.selectbox("Select Relay Contact", contact_opts, key="fire_contact")
-            fire_msg = (
-                f"FIRE ALERT ({selected_prop}): Nearest hotspot at {fire_threat_str}. "
-                f"Location W3W: {house_w3w} | Operator: {user_w3w} "
-                f"(https://www.google.com/maps?q={user_lat},{user_lon})"
-            )
-            wa_fire = f"https://api.whatsapp.com/send?text={urllib.parse.quote(fire_msg)}"
-            st.markdown(f'<a href="{wa_fire}" target="_blank" class="btn-broadcast">🚀 SEND FIRE LOCATION TO {chosen_fire_contact.upper()}</a>', unsafe_allow_html=True)
-
-# ==========================================
-# TAB 2: FLOOD COMMAND MATRIX (UK + EUROPE)
-# ==========================================
-with tab_flood:
-    has_active_flood_alarm = any(item.get("parsed_severity") in (1, 2) for item in flood_warnings) or (
-        surge_ratio_active is not None and surge_ratio_active >= st.session_state.discharge_ratio_threshold
+def build_colour_satellite_map(active_prop: dict, op_lat: float, op_lon: float, hazards: dict, zoom_start: int = 12, trail: list = None):
+    m = folium.Map(
+        location=[active_prop["lat"], active_prop["lon"]],
+        zoom_start=zoom_start,
+        tiles=None,
+        control_scale=True,
     )
-    if has_active_flood_alarm:
-        st.markdown(f"""
-        <div class="tactical-header-container header-alert">
-            <h1 class="tactical-title" style="color: #ff4757;">FLOOD WARNING ACTIVE: {selected_prop.upper()}</h1>
-        </div>
-        <div class="sub-status-bar" style="background-color: #170a0a; border: 1px solid #7c1a1a;">
-            <span style="color: #ff4757;">🌊 FEED: {flood_source_label}</span>
-            <span style="color: #ff4757;">FLOW: {discharge_str} ({ratio_str})</span>
-        </div>
-        """, unsafe_allow_html=True)
-    else:
-        st.markdown(f"""
-        <div class="tactical-header-container header-nominal">
-            <h1 class="tactical-title" style="color: #2ed573;">FLOOD MATRIX NOMINAL: {selected_prop.upper()}</h1>
-        </div>
-        <div class="sub-status-bar" style="background-color: #0a170f; border: 1px solid #1a7c3e;">
-            <span style="color: #2ed573;">🌊 FEED: {flood_source_label}</span>
-            <span style="color: #2ed573;">FLOW: {discharge_str} ({ratio_str})</span>
-        </div>
-        """, unsafe_allow_html=True)
+    folium.TileLayer(
+        tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+        attr="Esri World Imagery",
+        name="Colour Satellite",
+        overlay=False,
+        control=True,
+    ).add_to(m)
+    folium.TileLayer(
+        tiles="https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png",
+        attr="CartoDB Labels",
+        name="Place & Road Labels",
+        overlay=True,
+        control=True,
+    ).add_to(m)
+    folium.TileLayer(
+        tiles="OpenStreetMap",
+        name="Tactical Street Map",
+        overlay=False,
+        control=True,
+    ).add_to(m)
+    Fullscreen(position="topleft", title="Full Screen Map", title_cancel="Exit Full Screen").add_to(m)
+    folium.Marker([active_prop["lat"], active_prop["lon"]], tooltip=f"PROPERTY: {active_prop['name']}", icon=folium.Icon(color="blue", icon="home")).add_to(m)
+    folium.Marker([op_lat, op_lon], tooltip="OPERATOR LIVE GPS", icon=folium.Icon(color="green", icon="user")).add_to(m)
+    if trail and len(trail) > 1:
+        folium.PolyLine([[pt["lat"], pt["lon"]] for pt in trail], color="#38bdf8", weight=3, opacity=0.85, tooltip="Operator GPS Trail").add_to(m)
+    if hazards.get("fires"):
+        HeatMap([[f["lat"], f["lon"], f["frp"]] for f in hazards["fires"]], radius=22, blur=15, name="Thermal Heatmap").add_to(m)
+        for f in hazards["fires"]:
+            folium.CircleMarker([f["lat"], f["lon"]], radius=7, color="#ef4444", fill=True, fill_opacity=0.85, tooltip=f"Hotspot ({f['dist']} km)").add_to(m)
+    for fl in hazards.get("ea_floods", []):
+        if fl.get("lat") and fl.get("lon"):
+            folium.Marker([fl["lat"], fl["lon"]], tooltip=f"FLOOD ALERT: {fl['area']}", icon=folium.Icon(color="cadetblue", icon="tint")).add_to(m)
+    folium.LayerControl(collapsed=True).add_to(m)
+    return m
 
-    fl_col1, fl_col2 = st.columns(2)
-    with fl_col1:
-        with st.container(border=True):
-            render_panel_header(f"🌊 HYDROLOGICAL MAP — {len(st.session_state.properties)} SAVED LOCATIONS")
-            m_flood = folium.Map(
-                location=[house_lat, house_lon],
-                zoom_start=11,
-                tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
-                attr="Esri"
-            )
-            folium.Circle(
-                location=[house_lat, house_lon],
-                radius=scan_radius_km * 1000,
-                color="#52a3ff",
-                fill=True,
-                fill_opacity=0.08
-            ).add_to(m_flood)
 
-            for p_name, p_info in st.session_state.properties.items():
-                p_w3w = get_what3words(p_info["lat"], p_info["lon"], w3w_api_key)
-                if p_name == selected_prop:
-                    folium.Marker(
-                        [p_info["lat"], p_info["lon"]],
-                        popup=f"🏡 ACTIVE: {p_name} ({p_w3w})",
-                        tooltip=f"🏡 {p_name}",
-                        icon=folium.Icon(color="red", icon="home")
-                    ).add_to(m_flood)
-                else:
-                    folium.Marker(
-                        [p_info["lat"], p_info["lon"]],
-                        popup=f"⭐ FAVORITE: {p_name} ({p_w3w})",
-                        tooltip=f"⭐ {p_name}",
-                        icon=folium.Icon(color="orange", icon="star")
-                    ).add_to(m_flood)
+# --- ARDUINO HMAC-SHA256 SERIAL BRIDGE ---
+def get_available_ports():
+    if not HAS_SERIAL:
+        return ["NONE (pyserial missing)"]
+    ports = [p.device for p in serial.tools.list_ports.comports()]
+    return ["NONE"] + ports
 
-            folium.Marker(
-                [user_lat, user_lon],
-                popup=f"🏃 OPERATOR GPS ({user_w3w})",
-                tooltip="🏃 Current User GPS",
-                icon=folium.Icon(color="blue", icon="user")
-            ).add_to(m_flood)
-            st_folium(m_flood, width=650, height=340, key="flood_map")
 
-    with fl_col2:
-        with st.container(border=True):
-            render_panel_header("📊 EUROPEAN & UK FLOOD TELEMETRY")
-            st.markdown(f"""
-            <div class="status-pill-container">
-                <div class="status-pill"><div style="font-size:10px; color:#8b949e;">UK EA ACTIVE</div><div class="pill-val" style="color:#52a3ff;">{flood_count}</div></div>
-                <div class="status-pill"><div style="font-size:10px; color:#8b949e;">GLOFAS FLOW</div><div class="pill-val" style="color:#2ed573;">{discharge_str}</div></div>
-                <div class="status-pill"><div style="font-size:10px; color:#8b949e;">SURGE RATIO</div><div class="pill-val" style="color:#ffa502;">{ratio_str}</div></div>
-            </div>
-            <div class="w3w-badge">🏡 <b>{selected_prop}:</b> {house_w3w}</div>
-            <div class="w3w-badge">🌐 <b>COVERAGE ENGINE:</b> {flood_source_label}</div>
-            """, unsafe_allow_html=True)
+def connect_arduino(port: str):
+    if not HAS_SERIAL or not port or port.startswith("NONE"):
+        st.session_state.arduino_conn = None
+        return False, "Disconnected (Simulation Mode)"
+    conn = st.session_state.arduino_conn
+    if conn is not None and getattr(conn, "is_open", False) and conn.port == port:
+        return True, f"Connected ({port})"
+    try:
+        ser = serial.Serial(port, 115200, timeout=0.2, write_timeout=0.5)
+        time.sleep(1.5)
+        st.session_state.arduino_conn = ser
+        st.session_state.last_synced_cmds = {}
+        return True, f"Connected ({port})"
+    except Exception as e:
+        st.session_state.arduino_conn = None
+        return False, f"Port Error: {e}"
 
-            if flood_warnings:
-                for w in flood_warnings[:4]:
-                    sev = w.get("parsed_severity", 3)
-                    desc = w.get("description", "Flood Zone")
-                    if sev == 1:
-                        st.error(f"🚨 **SEVERITY 1 — SEVERE FLOOD WARNING (DANGER TO LIFE):** {desc}")
-                    elif sev == 2:
-                        st.error(f"🌊 **SEVERITY 2 — FLOOD WARNING (FLOODING EXPECTED):** {desc}")
+
+def sign_arduino_cmd(cmd: str) -> str:
+    epoch = int(time.time())
+    payload = f"{cmd}|{epoch}".encode("utf-8")
+    sig = hmac.new(ARDUINO_HMAC_KEY, payload, hashlib.sha256).hexdigest()[:12].upper()
+    return f"{cmd}|{epoch}|{sig}\n"
+
+
+def read_arduino_telemetry():
+    conn = st.session_state.arduino_conn
+    if not conn or not getattr(conn, "is_open", False):
+        return
+    try:
+        while conn.in_waiting > 0:
+            line = conn.readline().decode("utf-8", errors="ignore").strip()
+            if line.startswith("{") and line.endswith("}"):
+                data = json.loads(line)
+                st.session_state.arduino_telemetry = data
+                if data.get("thermo_sealed"):
+                    st.session_state.hw["thermogal_valve_deployed"] = True
+    except Exception:
+        pass
+
+
+def sync_hw_to_arduino():
+    conn = st.session_state.arduino_conn
+    if not conn or not getattr(conn, "is_open", False):
+        return
+    hw = st.session_state.hw
+    any_zone = hw["zone1_ridge"] or hw["zone2_eaves"] or hw["zone3_perim"]
+    pump_on = 1 if (not hw["master_shutdown"] and hw["agehic_pump_mode"] != "STANDBY OFF" and any_zone) else 0
+    pulse_on = 1 if "PULSE" in hw["pulse_cycle"] else 0
+    flood_on = 1 if (hw["barrier_front"] or hw["barrier_rear"] or hw["barrier_garage"]) else 0
+    sump_on = 1 if (not hw["master_shutdown"] and hw["sump_mode"] != "STANDBY OFF") else 0
+
+    desired = {
+        "PUMP": pump_on,
+        "PULSE": pulse_on,
+        "Z1": 1 if hw["zone1_ridge"] else 0,
+        "Z2": 1 if hw["zone2_eaves"] else 0,
+        "Z3": 1 if hw["zone3_perim"] else 0,
+        "TG_INJ": 1 if hw["thermogal_inject"] else 0,
+        "TG_SEAL": 1 if hw["thermogal_valve_deployed"] else 0,
+        "AC_CUT": 1 if hw["ac_breaker_cut"] else 0,
+        "FLOOD": flood_on,
+        "SUMP": sump_on,
+    }
+
+    sent_any = False
+    try:
+        for key, val in desired.items():
+            if st.session_state.last_synced_cmds.get(key) != val:
+                pkt = sign_arduino_cmd(f"{key}:{val}")
+                conn.write(pkt.encode("utf-8"))
+                st.session_state.last_synced_cmds[key] = val
+                sent_any = True
+                time.sleep(0.02)
+
+        now = time.time()
+        if pump_on == 1 and (sent_any or now - st.session_state.last_ping_sent >= 4.0):
+            conn.write(sign_arduino_cmd("PING").encode("utf-8"))
+            st.session_state.last_ping_sent = now
+    except Exception:
+        st.session_state.arduino_conn = None
+
+
+# ==============================================================================
+# 4. SIDEBAR: PROPERTY GEOCODER, EXACT GPS, THRESHOLDS & AUTHENTICATION
+# ==============================================================================
+with st.sidebar:
+    st.markdown("## 🛡️ COMMAND MATRIX")
+    prop_names = [p["name"] for p in st.session_state.properties]
+    selected_idx = st.selectbox(
+        "Active Monitored Property",
+        range(len(prop_names)),
+        format_func=lambda i: prop_names[i],
+    )
+    selected_idx = min(selected_idx, len(st.session_state.properties) - 1)
+    active_prop = st.session_state.properties[selected_idx]
+
+    with st.expander("➕ Add / Remove Properties (Max 5)"):
+        if len(st.session_state.properties) < 5:
+            new_p_name = st.text_input("Property Name", placeholder="e.g. Country House")
+            new_p_addr = st.text_input("UK Postcode or Address", placeholder="e.g. CM20 1AA or Harlow, Essex")
+            if st.button("Lookup & Save Property", use_container_width=True):
+                if new_p_name.strip() and new_p_addr.strip():
+                    geo = geocode_postcode_or_address(new_p_addr)
+                    if geo:
+                        st.session_state.properties.append({
+                            "name": f"{new_p_name.strip()} ({geo['label']})",
+                            "lat": geo["lat"],
+                            "lon": geo["lon"],
+                            "postcode": new_p_addr.strip().upper(),
+                        })
+                        st.rerun()
                     else:
-                        st.warning(f"⚠️ **SEVERITY 3 — FLOOD ALERT (BE PREPARED):** {desc}")
-            else:
-                st.info(f"Copernicus GloFAS 3-day peak river discharge near {selected_prop}: **{discharge_str}** ({ratio_str}).")
+                        st.error("Postcode/address not found. Check spelling.")
+        else:
+            st.info("Maximum 5 properties saved.")
 
-        with st.container(border=True):
-            render_panel_header("📡 FLOOD EMERGENCY BROADCASTER")
-            chosen_flood_contact = st.selectbox("Select Relay Contact", contact_opts, key="flood_contact")
-            flood_msg = (
-                f"FLOOD STATUS ({selected_prop}): EA Warnings: {flood_count} | River Flow: {discharge_str} ({ratio_str}). "
-                f"Location: {house_w3w} | Operator: {user_w3w} "
-                f"(https://www.google.com/maps?q={user_lat},{user_lon})"
-            )
-            wa_flood = f"https://api.whatsapp.com/send?text={urllib.parse.quote(flood_msg)}"
-            st.markdown(f'<a href="{wa_flood}" target="_blank" class="btn-broadcast">🚀 SEND FLOOD LOCATION TO {chosen_flood_contact.upper()}</a>', unsafe_allow_html=True)
-
-# ==========================================
-# TAB 3: BLACKOUT STEALTH OPS
-# ==========================================
-with tab_blackout:
-    st.markdown(f"""
-    <div class="blackout-box">
-        <div class="blackout-title">⬛ BLACKOUT STEALTH OPS — ZERO-GLARE NIGHT VISION MODE</div>
-        <p style="margin:0; font-size:12px;">ACTIVE ASSET: {selected_prop.upper()} | CLEARANCE TIER: {st.session_state.auth_tier}</p>
-    </div>
-    """, unsafe_allow_html=True)
-
-    b_col1, b_col2 = st.columns(2)
-    with b_col1:
-        st.markdown(f"""
-        <div class="blackout-box">
-            <div class="blackout-title">WHAT3WORDS & GPS COORDINATE LOCK</div>
-            <p style="margin:4px 0; font-size:12px;">OPERATOR W3W TAG:</p>
-            <div class="blackout-val">{user_w3w}</div>
-            <p style="margin:4px 0 12px 0; font-size:11px;">GPS: {user_lat:.5f}, {user_lon:.5f}</p>
-            <p style="margin:4px 0; font-size:12px;">{selected_prop.upper()} W3W TAG:</p>
-            <div class="blackout-val">{house_w3w}</div>
-            <p style="margin:4px 0 0 0; font-size:11px;">SEPARATION: {separation_dist:.2f} KM</p>
-        </div>
-        """, unsafe_allow_html=True)
-
-    with b_col2:
-        st.markdown(f"""
-        <div class="blackout-box">
-            <div class="blackout-title">THREAT & DEFENCE SUMMARY</div>
-            <p style="margin:6px 0; font-size:14px;">• NEAREST FIRE VECTOR: <b>{fire_threat_str}</b></p>
-            <p style="margin:6px 0; font-size:14px;">• GLOFAS RIVER DISCHARGE: <b>{discharge_str} ({ratio_str})</b></p>
-            <p style="margin:6px 0; font-size:14px;">• PERIMETER DEADBOLTS: <b>{'LOCKED' if hw_state['deadbolts_locked'] else 'UNLOCKED'}</b></p>
-            <p style="margin:6px 0; font-size:14px;">• SPRINKLERS / BARRIERS: <b>{'ARMED' if hw_state['sprinkler_armed'] or hw_state['flood_barrier_deployed'] else 'STANDBY'}</b></p>
-        </div>
-        """, unsafe_allow_html=True)
-
-    sos_msg = f"STEALTH SOS ({selected_prop}): Operator at {user_w3w} ({user_lat:.5f}, {user_lon:.5f}). Fire: {fire_threat_str} | Flow: {discharge_str}."
-    wa_sos = f"https://api.whatsapp.com/send?text={urllib.parse.quote(sos_msg)}"
-    st.markdown(f'<a href="{wa_sos}" target="_blank" class="btn-blackout-sos">TRANSMIT RED-CHANNEL SOS BEACON</a>', unsafe_allow_html=True)
-
-# ==========================================
-# TAB 4: EMERGENCY RELAYS & LOG EXPORT
-# ==========================================
-with tab_relays:
-    r_col1, r_col2 = st.columns(2)
-    with r_col1:
-        with st.container(border=True):
-            render_panel_header("🗃️ EMERGENCY CONTACTS / NEXT OF KIN")
-            with st.form("kin_entry_form", clear_on_submit=True):
-                k1, k2, k3 = st.columns(3)
-                with k1:
-                    new_name = st.text_input("Next of Kin Name")
-                with k2:
-                    new_rel = st.text_input("Relationship")
-                with k3:
-                    new_vec = st.text_input("Phone / Email")
-                if st.form_submit_button("➕ LOG CONTACT ENTRY") and new_name and new_vec:
-                    st.session_state.next_of_kin.append({
-                        "Name": new_name,
-                        "Relation": new_rel,
-                        "Contact": new_vec
-                    })
-                    st.toast(f"Logged safety node for {new_name}.", icon="✅")
-                    st.rerun()
-            st.dataframe(pd.DataFrame(st.session_state.next_of_kin), hide_index=True, width="stretch")
-
-    with r_col2:
-        with st.container(border=True):
-            render_panel_header("💾 MULTI-PROPERTY TELEMETRY LOG EXPORT")
-            ts_now = time.strftime("%Y-%m-%d %H:%M:%S")
-            log_dump = (
-                f"==================================================\n"
-                f"        TACTICAL MATRIX OPERATIONS RECORD          \n"
-                f"==================================================\n"
-                f"TIMESTAMP LOGGED       : {ts_now}\n"
-                f"ACTIVE LOCATION        : {selected_prop}\n"
-                f"LOCATION W3W           : {house_w3w}\n"
-                f"OPERATOR W3W           : {user_w3w}\n"
-                f"NEAREST FIRE VECTOR    : {fire_threat_str}\n"
-                f"RIVER DISCHARGE PEAK   : {discharge_str} ({ratio_str})\n"
-                f"SAVED LOCATIONS COUNT  : {len(st.session_state.properties)}/{MAX_LOCATIONS}\n"
-                f"==================================================\n"
-            )
-            st.download_button(
-                label="📥 DOWNLOAD INCIDENT LOG FILE (.LOG)",
-                data=log_dump,
-                file_name=f"tactical_dump_{int(time.time())}.log",
-                mime="text/plain",
-                width="stretch"
-            )
-
-# ==========================================
-# TAB 5: HOME DEFENCE & SECURITY (FAR RIGHT - SUBSCRIPTIONS ONLY)
-# ==========================================
-with tab_defence:
-    pro_secret = get_secret_safe("PRO_ACCESS_KEY", "PRO-2026")
-    vip_secret = get_secret_safe("VIP_ACCESS_KEY", "VIP-2026")
-    override_pin_secret = get_secret_safe("HARDWARE_PIN", "1234")
-
-    if st.session_state.auth_tier == "FREE":
-        st.markdown("""
-        <div class="tactical-header-container header-vip">
-            <h1 class="tactical-title" style="color: #ffa502;">🔒 SUBSCRIPTION REQUIRED: HOME DEFENCE & SECURITY</h1>
-        </div>
-        """, unsafe_allow_html=True)
-
-        with st.container(border=True):
-            render_panel_header("👑 TWO-TIER SUBSCRIPTION AUTHENTICATION GATE")
-            now = time.time()
-            if now < st.session_state.lockout_until:
-                rem = int(st.session_state.lockout_until - now)
-                st.error(f"🚨 SECURITY LOCKOUT ACTIVE: Too many invalid attempts. Retry in {rem}s.")
-            else:
-                st.info(
-                    "**Choose Your Clearance Tier:**\n"
-                    "* **PRO TIER (`PRO-2026`):** Unlocks Multi-Property Smart Deadbolts, Perimeter Sensors & CCTV Feeds.\n"
-                    "* **VIP TIER (`VIP-2026`):** Unlocks Full Perimeter Security **PLUS** Remote Fire Sprinklers, Flood Barriers & Emergency Lockdown."
-                )
-                sub_c1, sub_c2 = st.columns([3, 1])
-                with sub_c1:
-                    entered_key = st.text_input(
-                        "Enter Subscription Access Key",
-                        type="password",
-                        placeholder="PRO-2026 or VIP-2026",
-                        key="defence_sub_input"
-                    )
-                with sub_c2:
-                    st.markdown("<div style='margin-top: 28px;'></div>", unsafe_allow_html=True)
-                    if st.button("🔓 AUTHENTICATE", width="stretch", key="defence_auth_btn"):
-                        if entered_key == vip_secret:
-                            st.session_state.auth_tier = "VIP"
-                            st.session_state.failed_attempts = 0
-                            st.session_state.security_logs.append(f"[{time.strftime('%H:%M:%S')}] VIP clearance granted.")
-                            st.rerun()
-                        elif entered_key == pro_secret:
-                            st.session_state.auth_tier = "PRO"
-                            st.session_state.failed_attempts = 0
-                            st.session_state.security_logs.append(f"[{time.strftime('%H:%M:%S')}] PRO clearance granted.")
-                            st.rerun()
-                        else:
-                            st.session_state.failed_attempts += 1
-                            st.session_state.security_logs.append(f"[{time.strftime('%H:%M:%S')}] Failed auth attempt #{st.session_state.failed_attempts}.")
-                            if st.session_state.failed_attempts >= 3:
-                                st.session_state.lockout_until = time.time() + 60
-                                st.error("🚨 3 failed attempts. Terminal locked for 60 seconds.")
-                            else:
-                                st.error(f"Invalid key ({st.session_state.failed_attempts}/3 attempts before lockout).")
-    else:
-        hdr_col1, hdr_col2 = st.columns([4, 1])
-        with hdr_col1:
-            st.markdown(f"""
-            <div class="tactical-header-container header-vip">
-                <h1 class="tactical-title" style="color: #ffa502;">🛡️ {st.session_state.auth_tier} DEFENCE MATRIX — {selected_prop.upper()}</h1>
-            </div>
-            """, unsafe_allow_html=True)
-        with hdr_col2:
-            st.markdown("<div style='margin-top: 8px;'></div>", unsafe_allow_html=True)
-            if st.button("🔒 LOCK SESSION", width="stretch"):
-                st.session_state.auth_tier = "FREE"
+        if len(st.session_state.properties) > 1:
+            if st.button("🗑️ Delete Active Property", use_container_width=True):
+                st.session_state.properties.pop(selected_idx)
                 st.rerun()
 
-        def_prop = st.selectbox(
-            "🎯 TARGET LOCATION FOR HARDWARE ACTUATION",
-            list(st.session_state.properties.keys()),
-            index=list(st.session_state.properties.keys()).index(selected_prop),
-            key="defence_prop_selector"
-        )
-        if def_prop != selected_prop:
-            st.session_state.active_property = def_prop
+    st.divider()
+    st.markdown("### 📍 Emergency Operator GPS")
+    if HAS_JS_EVAL:
+        loc_data = get_geolocation()
+        if isinstance(loc_data, dict) and "coords" in loc_data:
+            new_lat = round(float(loc_data["coords"]["latitude"]), 6)
+            new_lon = round(float(loc_data["coords"]["longitude"]), 6)
+            st.session_state.op_coords = {"lat": new_lat, "lon": new_lon, "source": "LIVE BROWSER GPS"}
+            record_operator_position(new_lat, new_lon)
+
+    st.caption(
+        f"Source: **{st.session_state.op_coords['source']}**\n\n"
+        f"`{st.session_state.op_coords['lat']:.6f}, {st.session_state.op_coords['lon']:.6f}`"
+    )
+    with st.expander("🎯 Manual Exact GPS Override"):
+        m_lat = st.number_input("Exact Latitude", value=st.session_state.op_coords["lat"], format="%.6f")
+        m_lon = st.number_input("Exact Longitude", value=st.session_state.op_coords["lon"], format="%.6f")
+        if st.button("Set Exact Coordinates", use_container_width=True):
+            st.session_state.op_coords = {"lat": round(m_lat, 6), "lon": round(m_lon, 6), "source": "MANUAL GPS"}
+            record_operator_position(round(m_lat, 6), round(m_lon, 6))
             st.rerun()
 
-        def_hw = st.session_state.property_hardware[def_prop]
+    st.divider()
+    st.markdown("### ⚙️ Sensor & Alert Thresholds")
+    fire_radius = st.slider("Fire Proximity Radius (km)", 1.0, 50.0, 10.0, 0.5)
+    surge_limit = st.slider("River Surge Ratio Alert", 1.1, 4.0, 1.8, 0.1)
+    firms_key = st.text_input("NASA FIRMS API Key", value="DEMO_KEY", type="password")
+    simulate_hazards = st.toggle("Enable Simulated Test Hazards", value=False)
+    audio_alarm = st.toggle("Audible Alert Siren", value=False)
 
-        with st.container(border=True):
-            render_panel_header(f"🔐 PERIMETER SECURITY & INTRUSION MATRIX — {def_prop.upper()} ({st.session_state.auth_tier} ACCESS)")
-            sec1, sec2, sec3 = st.columns(3)
-            with sec1:
-                def_hw["deadbolts_locked"] = st.toggle(
-                    "Smart Perimeter Deadbolts",
-                    value=def_hw["deadbolts_locked"],
-                    key=f"db_{def_prop}"
-                )
-                st.caption("Status: SEALED" if def_hw["deadbolts_locked"] else "Status: UNLOCKED")
-            with sec2:
-                def_hw["perimeter_sensors"] = st.toggle(
-                    "Infrared & Motion Perimeter Grid",
-                    value=def_hw["perimeter_sensors"],
-                    key=f"ps_{def_prop}"
-                )
-                st.caption("4 Zones Armed" if def_hw["perimeter_sensors"] else "Sensors Bypassed")
-            with sec3:
-                def_hw["cctv_active"] = st.toggle(
-                    "Encrypted CCTV Cloud Recording",
-                    value=def_hw["cctv_active"],
-                    key=f"cc_{def_prop}"
-                )
-                st.caption("4K Night-IR Streaming" if def_hw["cctv_active"] else "Cameras Offline")
+    st.divider()
+    st.markdown("### 🔐 Tier Authentication")
+    if st.session_state.pin_attempts >= 3:
+        st.error("TERMINAL LOCKED (3 Failed PIN Attempts)")
+    else:
+        pin_input = st.text_input("Enter Access PIN (PRO / VIP)", type="password", max_chars=8)
+        if st.button("Verify PIN", use_container_width=True):
+            if pin_input == "4492":
+                st.session_state.pro_unlocked = True
+                st.session_state.pin_attempts = 0
+                log_security_event("PRO Tier unlocked.")
+                st.success("PRO TIER UNLOCKED")
+            elif pin_input == "9910":
+                st.session_state.pro_unlocked = True
+                st.session_state.vip_unlocked = True
+                st.session_state.vip_last_active = time.time()
+                st.session_state.pin_attempts = 0
+                log_security_event("VIP Hardware Tier unlocked.")
+                st.success("VIP HARDWARE TIER UNLOCKED")
+            else:
+                st.session_state.pin_attempts += 1
+                log_security_event(f"Failed PIN attempt ({st.session_state.pin_attempts}/3).")
+                st.error(f"Invalid PIN ({st.session_state.pin_attempts}/3)")
 
-        if st.session_state.auth_tier != "VIP":
-            with st.container(border=True):
-                render_panel_header("👑 VIP HARDWARE ACTUATORS (UPGRADE REQUIRED)")
-                st.warning(
-                    "You are logged in with **PRO Tier** (Security Only). Upgrade to **VIP Tier (`VIP-2026`)** to unlock remote **Fire Suppression Sprinklers**, **Hydraulic Flood Barriers**, and **PIN-Protected Emergency Lockdown**."
-                )
+
+# ==============================================================================
+# 5. LIVE HAZARD SCAN & SIREN TRIGGER
+# ==============================================================================
+hazards = scan_location_hazards(active_prop["lat"], active_prop["lon"], fire_radius, firms_key, simulate_hazards)
+fire_alert = len(hazards["fires"]) > 0
+flood_alert = len(hazards["ea_floods"]) > 0 or hazards["river_surge"] >= surge_limit
+
+if audio_alarm and (fire_alert or flood_alert):
+    components.html(
+        """
+        <script>
+        try {
+            const ctx = new (window.AudioContext || window.webkitAudioContext)();
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+            osc.type = 'sawtooth';
+            osc.frequency.setValueAtTime(660, ctx.currentTime);
+            osc.frequency.exponentialRampToValueAtTime(880, ctx.currentTime + 0.35);
+            gain.gain.setValueAtTime(0.08, ctx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.4);
+            osc.connect(gain);
+            gain.connect(ctx.destination);
+            osc.start();
+            osc.stop(ctx.currentTime + 0.4);
+        } catch (e) {}
+        </script>
+        """,
+        height=0,
+    )
+
+
+# ==============================================================================
+# 6. STREAMLINED 3-TAB INTERFACE
+# ==============================================================================
+tab1, tab2, tab3 = st.tabs([
+    "🛰️ Fire & Flood Command",
+    "🌑 Blackout Stealth Ops",
+    "🛡️ Home Defence (VIP)",
+])
+
+# --- TAB 1: FIRE & FLOOD COMMAND (NO PUMP CONTROLS, FULL/DETAILS TOGGLE, NOK QR) ---
+with tab1:
+    top_bar_l, top_bar_r = st.columns([3.2, 1.0])
+    with top_bar_l:
+        if fire_alert or flood_alert:
+            st.error(
+                f"🚨 ACTIVE THREAT DETECTED AT {active_prop['name'].upper()} — "
+                f"FIRES: {len(hazards['fires'])} | EA FLOOD WARNINGS: {len(hazards['ea_floods'])} | "
+                f"RIVER SURGE: {hazards['river_surge']}x"
+            )
         else:
-            d1, d2, d3 = st.columns(3)
-            with d1:
-                with st.container(border=True):
-                    render_panel_header("🔥 FIRE SUPPRESSION PUMPS")
-                    def_hw["sprinkler_armed"] = st.toggle(
-                        "Arm Roof & Perimeter Sprinklers",
-                        value=def_hw["sprinkler_armed"],
-                        key=f"sp_{def_prop}"
-                    )
-                    def_hw["target_psi"] = st.slider(
-                        "Line Pressure (PSI)", 40, 120, def_hw["target_psi"],
-                        key=f"psi_{def_prop}"
-                    )
-                    st.metric("Water Reservoir", "96% (4,800 L)", delta="Active" if def_hw["sprinkler_armed"] else "Standby")
+            st.success(f"✅ PERIMETER CLEAR — {active_prop['name']} (NO ACTIVE FIRE OR FLOOD BREACHES)")
+    with top_bar_r:
+        full_map_mode = st.toggle("🗺️ Full Map View", value=False, key="tog_full_map_view")
 
-            with d2:
-                with st.container(border=True):
-                    render_panel_header("🌊 FLOOD BARRIERS & SUMP")
-                    def_hw["flood_barrier_deployed"] = st.toggle(
-                        "Deploy Hydraulic Flood Gates",
-                        value=def_hw["flood_barrier_deployed"],
-                        key=f"fb_{def_prop}"
-                    )
-                    def_hw["sump_pump_active"] = st.toggle(
-                        "Dual Submersible Sump Pumps",
-                        value=def_hw["sump_pump_active"],
-                        key=f"sm_{def_prop}"
-                    )
-                    def_hw["flow_rate"] = st.slider(
-                        "Discharge Rate (L/min)", 100, 600, def_hw["flow_rate"],
-                        key=f"fl_{def_prop}"
-                    )
-                    st.metric("Sump Pit Level", "12 cm", delta=f"{def_hw['flow_rate']} L/min")
+    op_lat = st.session_state.op_coords["lat"]
+    op_lon = st.session_state.op_coords["lon"]
+    place_label = reverse_geocode_place(op_lat, op_lon)
+    dist_km = haversine_km(op_lat, op_lon, active_prop["lat"], active_prop["lon"])
+    bearing = compass_bearing(op_lat, op_lon, active_prop["lat"], active_prop["lon"])
+    grid_hash = to_w3w_hash(op_lat, op_lon)
+    maps_pin_url = f"https://maps.google.com/?q={op_lat:.6f},{op_lon:.6f}"
 
-            with d3:
-                with st.container(border=True):
-                    render_panel_header("🚨 PIN-PROTECTED LOCKDOWN")
-                    def_hw["shutters_locked"] = st.toggle(
-                        "Steel Storm & Ember Shutters",
-                        value=def_hw["shutters_locked"],
-                        key=f"sh_{def_prop}"
-                    )
-                    pin_input = st.text_input("4-Digit Hardware PIN (Demo: 1234)", type="password", max_chars=4, key=f"pin_{def_prop}")
-                    if st.button("🚨 EXECUTE FULL LOCKDOWN", width="stretch", key=f"ld_{def_prop}"):
-                        if pin_input == override_pin_secret:
-                            def_hw["sprinkler_armed"] = True
-                            def_hw["flood_barrier_deployed"] = True
-                            def_hw["sump_pump_active"] = True
-                            def_hw["deadbolts_locked"] = True
-                            def_hw["shutters_locked"] = True
-                            st.session_state.security_logs.append(f"[{time.strftime('%H:%M:%S')}] FULL LOCKDOWN executed for {def_prop}.")
-                            st.toast(f"FULL LOCKDOWN EXECUTED: {def_prop}", icon="🚨")
-                            st.rerun()
-                        else:
-                            st.error("Invalid 4-digit Hardware Override PIN.")
+    if full_map_mode:
+        # Full-screen colour satellite map + compact right telemetry card
+        fm_left, fm_right = st.columns([3.4, 1.1])
+        with fm_left:
+            if HAS_FOLIUM:
+                m_full = build_colour_satellite_map(
+                    active_prop, op_lat, op_lon, hazards, zoom_start=13,
+                    trail=st.session_state.gps_trail if st.session_state.nok_tracking_active else None
+                )
+                st_folium(m_full, width=None, height=640, use_container_width=True, key="main_cmd_map_full")
+            else:
+                st.map(pd.DataFrame([{"lat": active_prop["lat"], "lon": active_prop["lon"]}, {"lat": op_lat, "lon": op_lon}]))
+        with fm_right:
+            st.markdown(
+                f"""<div class="tactical-card">
+                    <div class="card-header">📍 LIVE DISPATCH DATA | {place_label}</div>
+                    <div style="font-size:13px; font-weight:700; color:#38bdf8;">LAT: {op_lat:.6f}° N</div>
+                    <div style="font-size:13px; font-weight:700; color:#38bdf8;">LON: {op_lon:.6f}° E</div>
+                    <div style="font-size:12px; color:#94a3b8; margin-top:4px;">GRID: {grid_hash}</div>
+                    <div style="font-size:12px; color:#94a3b8;">RANGE: {dist_km:.2f} km {bearing}</div>
+                </div>""",
+                unsafe_allow_html=True,
+            )
+            st.markdown(
+                f"""<div class="tactical-card">
+                    <div class="card-header">🔥 THERMAL / FLOOD</div>
+                    <div style="font-size:14px; font-weight:700;">Hotspots: {len(hazards['fires'])} | Surge: {hazards['river_surge']}x</div>
+                    <div style="font-size:12px; color:#94a3b8;">EA Warnings: {len(hazards['ea_floods'])}</div>
+                </div>""",
+                unsafe_allow_html=True,
+            )
+            if st.button("🔄 Refresh Feeds", use_container_width=True, key="btn_ref_full"):
+                scan_location_hazards.clear()
+                st.rerun()
+    else:
+        # Split Details View: Unobstructed Colour Map (Left) + Side Coordinates, Metrics & NOK QR (Right)
+        col_map, col_side = st.columns([2.25, 1.25])
 
-        with st.container(border=True):
-            render_panel_header("📜 SECURITY & HARDWARE AUDIT LOG")
-            for entry in reversed(st.session_state.security_logs[-6:]):
-                st.code(entry, language="text")
+        with col_map:
+            if HAS_FOLIUM:
+                m_det = build_colour_satellite_map(
+                    active_prop, op_lat, op_lon, hazards, zoom_start=13,
+                    trail=st.session_state.gps_trail if st.session_state.nok_tracking_active else None
+                )
+                st_folium(m_det, width=None, height=450, use_container_width=True, key="main_cmd_map_details")
+            else:
+                st.map(pd.DataFrame([{"lat": active_prop["lat"], "lon": active_prop["lon"]}, {"lat": op_lat, "lon": op_lon}]))
+
+            disp_c1, disp_c2 = st.columns([3.2, 1.0])
+            with disp_c1:
+                dispatch_text = (
+                    f"OPERATOR ({place_label} / {st.session_state.op_coords['source']}): {op_lat:.6f}, {op_lon:.6f} | "
+                    f"PROPERTY ({active_prop['name']}): {active_prop['lat']:.6f}, {active_prop['lon']:.6f} | "
+                    f"RANGE: {dist_km:.2f} km {bearing}"
+                )
+                st.code(dispatch_text, language="text")
+            with disp_c2:
+                if st.button("🔄 Refresh Feeds", use_container_width=True, key="btn_ref_det"):
+                    scan_location_hazards.clear()
+                    st.rerun()
+
+        with col_side:
+            # Side-panel Auto-Generated Place Name & Lat/Lon Card (kept off the map)
+            st.markdown(
+                f"""<div class="tactical-card">
+                    <div class="card-header">📍 LIVE DISPATCH DATA | {place_label}</div>
+                    <div style="font-size:14px; font-weight:700; color:#38bdf8;">LAT: {op_lat:.6f}° N &nbsp;|&nbsp; LON: {op_lon:.6f}° E</div>
+                    <div style="font-size:12px; color:#94a3b8; margin-top:4px;">GRID HASH: {grid_hash} &nbsp;|&nbsp; RANGE: {dist_km:.2f} km {bearing}</div>
+                </div>""",
+                unsafe_allow_html=True,
+            )
+
+            m1, m2 = st.columns(2)
+            with m1:
+                st.markdown(
+                    f"""<div class="tactical-card">
+                        <div class="card-header">🔥 Hotspots</div>
+                        <div class="{'status-val-red' if len(hazards['fires']) else 'status-val-green'}">{len(hazards['fires'])}</div>
+                    </div>""",
+                    unsafe_allow_html=True,
+                )
+            with m2:
+                st.markdown(
+                    f"""<div class="tactical-card">
+                        <div class="card-header">🌊 River Surge</div>
+                        <div class="{'status-val-red' if flood_alert else 'status-val-cyan'}">{hazards['river_surge']}x</div>
+                    </div>""",
+                    unsafe_allow_html=True,
+                )
+
+            # Next-of-Kin Live Tracking & Instant QR Code Panel
+            st.markdown('<div class="card-header">📡 NEXT-OF-KIN LIVE TRACKING & QR SHARE</div>', unsafe_allow_html=True)
+            st.session_state.nok_tracking_active = st.toggle(
+                "Broadcast Live GPS Beacon to Next of Kin",
+                value=st.session_state.nok_tracking_active,
+                key="tog_nok_beacon",
+            )
+            if st.session_state.nok_tracking_active:
+                st.caption(f"🟢 BEACON ACTIVE — Session `{st.session_state.nok_session_token}`")
+
+            qr_mode = st.selectbox(
+                "QR Code Payload",
+                ["Google Maps Live Pin", "WhatsApp SOS Dispatch"],
+                key="sel_qr_mode",
+            )
+            primary_nok = st.session_state.contacts[0]
+            sos_msg = (
+                f"EMERGENCY ALERT ({active_prop['name']}): Operator at {place_label} "
+                f"({op_lat:.6f}, {op_lon:.6f}) {maps_pin_url} | "
+                f"Fires: {len(hazards['fires'])} | River Surge: {hazards['river_surge']}x | Session: {st.session_state.nok_session_token}"
+            )
+            wa_sos_url = f"https://wa.me/{primary_nok['phone'].replace('+', '')}?text={requests.utils.quote(sos_msg)}"
+            qr_target = maps_pin_url if qr_mode == "Google Maps Live Pin" else wa_sos_url
+
+            qr_bytes = generate_qr_png(qr_target)
+            if qr_bytes:
+                qc1, qc2 = st.columns([1.1, 1.3])
+                with qc1:
+                    st.image(qr_bytes, caption="Scan with Phone", use_container_width=True)
+                with qc2:
+                    st.download_button(
+                        "⬇️ Download QR PNG",
+                        data=qr_bytes,
+                        file_name=f"nok_emergency_qr_{st.session_state.nok_session_token}.png",
+                        mime="image/png",
+                        use_container_width=True,
+                    )
+                    st.markdown(f"[📲 Open WhatsApp Relay]({wa_sos_url})")
+            else:
+                st.info("Install `qrcode[pil]` to render scannable PNG QR codes.")
+
+            with st.expander("➕ Manage Next-of-Kin Contacts & Webhook"):
+                for c in st.session_state.contacts:
+                    c_msg = f"EMERGENCY ({active_prop['name']}): {op_lat:.6f},{op_lon:.6f} ({maps_pin_url})"
+                    c_wa = f"https://wa.me/{c['phone'].replace('+', '')}?text={requests.utils.quote(c_msg)}"
+                    st.markdown(f"- **{c['name']}** (`{c['phone']}`) — [WhatsApp]({c_wa})")
+                nc1, nc2 = st.columns(2)
+                new_n = nc1.text_input("Name", placeholder="e.g. Sarah", key="nok_add_name")
+                new_p = nc2.text_input("Phone", placeholder="+447700900099", key="nok_add_phone")
+                if st.button("Save Contact", use_container_width=True, key="btn_save_nok"):
+                    if new_n.strip() and new_p.strip():
+                        st.session_state.contacts.append({"name": new_n.strip(), "phone": new_p.strip(), "role": "Next of Kin"})
+                        st.rerun()
+                st.session_state.nok_webhook_url = st.text_input(
+                    "Optional Live GPS Webhook URL (POST JSON)",
+                    value=st.session_state.nok_webhook_url,
+                    placeholder="https://ntfy.sh/your-private-topic",
+                )
+
+
+# --- TAB 2: BLACKOUT STEALTH OPS ---
+with tab2:
+    st.markdown(
+        f"""
+        <div class="stealth-hud">
+            <h3>🌑 BLACKOUT STEALTH HUD // ZERO-GLARE MODE</h3>
+            <p><b>UTC TIMESTAMP:</b> {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}</p>
+            <p><b>OPERATOR EXACT GPS:</b> {st.session_state.op_coords['lat']:.6f}, {st.session_state.op_coords['lon']:.6f} ({st.session_state.op_coords['source']})</p>
+            <p><b>TARGET PROPERTY:</b> {active_prop['name']} ({active_prop['lat']:.6f}, {active_prop['lon']:.6f})</p>
+            <p><b>ACTIVE FIRES IN RADIUS:</b> {len(hazards['fires'])} | <b>RIVER SURGE:</b> {hazards['river_surge']}x</p>
+            <p><b>48V A.G.E.H.I.C. BUS:</b> {st.session_state.hw['batt_a_pct']}% / {st.session_state.hw['batt_b_pct']}% |
+               <b>10,000L CISTERN:</b> {st.session_state.hw['cistern_litres']} L</p>
+            <p><b>MASTER SHUTDOWN STATE:</b> {'ENGAGED (SAFE ISOLATION)' if st.session_state.hw['master_shutdown'] else 'DISENGAGED (ARMED)'}</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+# --- TAB 3: HOME DEFENCE (VIP) — ALL PUMP & ACTUATOR CONTROLS ---
+with tab3:
+    if st.session_state.vip_unlocked and (time.time() - st.session_state.vip_last_active > 300):
+        st.session_state.vip_unlocked = False
+        st.session_state.vip_safety_armed = False
+        log_security_event("VIP Terminal auto-locked due to 5-minute inactivity timeout.")
+
+    if not st.session_state.vip_unlocked:
+        st.warning("RESTRICTED TIER: Enter VIP PIN (9910) in the sidebar to unlock Home Defence controls.")
+    else:
+        st.session_state.vip_last_active = time.time()
+        hw = st.session_state.hw
+        read_arduino_telemetry()
+
+        ext_t = hw["ambient_temp_c"]
+        base_vault = 20 + max(0, (ext_t - 25) // 4)
+        cooling_offset = (5 if hw["peltier_cooler_on"] else 0) + (4 if hw["micromist_cooling_on"] else 0)
+        hw["vault_temp_c"] = max(18, min(52, base_vault - cooling_offset))
+
+        if not hw["master_shutdown"]:
+            if hw["agehic_pump_mode"] == "AUTO (FIRMS / THERMAL)" and (fire_alert or ext_t >= 45):
+                hw["zone1_ridge"] = True
+                hw["zone2_eaves"] = True
+                hw["zone3_perim"] = True
+                hw["intake_valve"] = True
+                hw["ac_breaker_cut"] = True
+            if (
+                hw["thermogal_mode"] == "AUTO-THERMAL (65°C)"
+                and ext_t >= 65
+                and not hw["thermogal_valve_deployed"]
+                and hw["thermogal_tank_litres"] > 0
+            ):
+                hw["thermogal_valve_deployed"] = True
+                hw["thermogal_tank_litres"] = max(0, hw["thermogal_tank_litres"] - 20)
+                log_security_event("AUTO-THERMAL (65°C): ThermoGel Shutdown Valve deployed.")
+
+        cab_status_txt = "CABINET ISOLATED // MASTER SHUTDOWN ENGAGED" if hw["master_shutdown"] else "A.G.E.H.I.C. CABINET ENERGIZED — THERMAL SENSORS ACTIVE"
+        st.markdown(
+            f'<div class="tactical-banner">🛡️ {active_prop["name"].upper()} HOME DEFENCE // {cab_status_txt}</div>',
+            unsafe_allow_html=True,
+        )
+
+        r1c1, r1c2, r1c3, r1c4 = st.columns(4)
+        with r1c1:
+            ac_on = not hw["ac_breaker_cut"]
+            st.markdown(f'<div class="tactical-card"><div class="card-header">❄️ Cabinet AC</div><div class="{"status-val-green" if ac_on else "status-val-red"}">{"ON" if ac_on else "CUT"}</div></div>', unsafe_allow_html=True)
+        with r1c2:
+            wf_on = (hw["zone1_ridge"] or hw["zone2_eaves"] or hw["zone3_perim"]) and not hw["master_shutdown"]
+            st.markdown(f'<div class="tactical-card"><div class="card-header">🔥 Wildfire System</div><div class="{"status-val-green" if wf_on else "status-val-cyan"}">{"SPRAYING" if wf_on else "ARMED"}</div></div>', unsafe_allow_html=True)
+        with r1c3:
+            avail_ah = (65 if hw["batt_a_fuse_ok"] else 0) + (65 if hw["batt_b_fuse_ok"] else 0)
+            st.markdown(f'<div class="tactical-card"><div class="card-header">⚡ 48V Bus Ah</div><div class="status-val-cyan">{avail_ah}Ah</div></div>', unsafe_allow_html=True)
+        with r1c4:
+            st.markdown(f'<div class="tactical-card"><div class="card-header">🧪 Gel Tank Level</div><div class="status-val-green">{hw["thermogal_tank_litres"]}L</div></div>', unsafe_allow_html=True)
+
+        sw_left, sw_right = st.columns([1.3, 1.1])
+        with sw_left:
+            st.markdown('<div class="card-header">🔥 A.G.E.H.I.C. WILDFIRE & FLOOD RELAY SWITCHES</div>', unsafe_allow_html=True)
+            lock_sp = hw["master_shutdown"] or hw["agehic_pump_mode"] == "STANDBY OFF"
+
+            def relay_row(label: str, state: bool, key: str, disabled: bool = False):
+                c_lbl, c_btn = st.columns([1.8, 0.8])
+                with c_lbl:
+                    st.markdown(f"<div style='padding-top:6px; font-size:13px; font-weight:600;'>{label}</div>", unsafe_allow_html=True)
+                with c_btn:
+                    if st.button("ON" if state else "OFF", key=key, disabled=disabled, use_container_width=True):
+                        return True
+                return False
+
+            if relay_row("Cabinet AC Breaker", not hw["ac_breaker_cut"], "sw_ac"):
+                hw["ac_breaker_cut"] = not hw["ac_breaker_cut"]
+                st.rerun()
+
+            sump_on = hw["sump_mode"] != "STANDBY OFF"
+            if relay_row("48V Sump & Pump A", sump_on, "sw_sump"):
+                hw["sump_mode"] = "STANDBY OFF" if sump_on else "AUTO (FLOAT)"
+                st.rerun()
+
+            if relay_row("Zone 1 (Roofline Ridge)", hw["zone1_ridge"], "sw_z1", lock_sp):
+                hw["zone1_ridge"] = not hw["zone1_ridge"]
+                st.rerun()
+
+            if relay_row("Zone 2 (Eaves)", hw["zone2_eaves"], "sw_z2", lock_sp):
+                hw["zone2_eaves"] = not hw["zone2_eaves"]
+                st.rerun()
+
+            if relay_row("Zone 3 (Perimeter)", hw["zone3_perim"], "sw_z3", lock_sp):
+                hw["zone3_perim"] = not hw["zone3_perim"]
+                st.rerun()
+
+            if relay_row("ThermoGel Eductor", hw["thermogal_inject"], "sw_tg"):
+                hw["thermogal_inject"] = not hw["thermogal_inject"]
+                st.rerun()
+
+            if relay_row("10,000L Cistern Intake", hw["intake_valve"], "sw_cis"):
+                hw["intake_valve"] = not hw["intake_valve"]
+                st.rerun()
+
+        with sw_right:
+            prop_short_title = active_prop["name"].split("(")[0].strip()
+            arm_col1, arm_col2 = st.columns([1.4, 1])
+            with arm_col1:
+                st.markdown(
+                    f"**{prop_short_title}**  \n"
+                    f"<span style='color:#94a3b8; font-size:12px;'>"
+                    f"{'⚠️ ' + str(len(hazards['fires'])) + ' Hotspots Active' if fire_alert else 'No Hotspots in Radius'} | "
+                    f"River: {hazards['river_surge']}x</span>",
+                    unsafe_allow_html=True,
+                )
+            with arm_col2:
+                st.session_state.vip_safety_armed = st.toggle(
+                    "VIP Safety Armed",
+                    value=st.session_state.vip_safety_armed,
+                    key="tog_vip_arm_card",
+                )
+
+            if HAS_FOLIUM:
+                mini_m = build_colour_satellite_map(active_prop, op_lat, op_lon, hazards, zoom_start=14)
+                st_folium(mini_m, width=None, height=230, use_container_width=True, key="vip_mini_map")
+
+        st.divider()
+        m1, m2, m3, m4 = st.columns(4)
+        with m1:
+            if st.button("🛑 EMERGENCY SHUTDOWN", disabled=not st.session_state.vip_safety_armed, use_container_width=True, key="btn_m_shut"):
+                hw["master_shutdown"] = True
+                hw["agehic_pump_mode"] = "STANDBY OFF"
+                hw["zone1_ridge"] = False
+                hw["zone2_eaves"] = False
+                hw["zone3_perim"] = False
+                hw["intake_valve"] = False
+                hw["thermogal_inject"] = False
+                hw["thermogal_valve_deployed"] = True
+                hw["ac_breaker_cut"] = True
+                hw["sump_mode"] = "STANDBY OFF"
+                log_security_event("EMERGENCY MASTER SHUTDOWN triggered.")
+                st.rerun()
+        with m2:
+            if st.button("🌊 FULL FLOOD ENVELOPE", disabled=not st.session_state.vip_safety_armed, use_container_width=True, key="btn_m_flood"):
+                hw["master_shutdown"] = False
+                hw["barrier_mode"] = "MANUAL OVERRIDE"
+                hw["barrier_front"] = True
+                hw["barrier_rear"] = True
+                hw["barrier_garage"] = True
+                hw["airbricks_sealed"] = True
+                hw["sewer_valve_locked"] = True
+                hw["letterbox_sealed"] = True
+                log_security_event("Full Flood Envelope manually engaged.")
+                st.rerun()
+        with m3:
+            if st.button("🧪 THERMOGEL SEAL", disabled=not st.session_state.vip_safety_armed, use_container_width=True, key="btn_m_gel"):
+                hw["thermogal_valve_deployed"] = not hw["thermogal_valve_deployed"]
+                if hw["thermogal_valve_deployed"]:
+                    hw["thermogal_tank_litres"] = max(0, hw["thermogal_tank_litres"] - 20)
+                st.rerun()
+        with m4:
+            if st.button("🔄 RESET DRY STANDBY", disabled=not st.session_state.vip_safety_armed, use_container_width=True, key="btn_m_reset"):
+                hw["master_shutdown"] = False
+                hw["barrier_mode"] = "AUTO-BUOYANCY"
+                hw["barrier_front"] = False
+                hw["barrier_rear"] = False
+                hw["barrier_garage"] = False
+                hw["airbricks_sealed"] = False
+                hw["letterbox_sealed"] = False
+                hw["sump_mode"] = "AUTO (FLOAT)"
+                hw["agehic_pump_mode"] = "AUTO (FIRMS / THERMAL)"
+                hw["zone1_ridge"] = False
+                hw["zone2_eaves"] = False
+                hw["zone3_perim"] = False
+                hw["intake_valve"] = True
+                hw["thermogal_inject"] = False
+                hw["thermogal_valve_deployed"] = False
+                hw["ac_breaker_cut"] = False
+                log_security_event("System reset to Dry Standby.")
+                st.rerun()
+
+        with st.expander("🔌 Arduino Hardware Link (HMAC-SHA256 Serial Bridge) & Sliders", expanded=False):
+            ac1, ac2, ac3 = st.columns([1.4, 1.2, 1])
+            with ac1:
+                avail_ports = get_available_ports()
+                curr_idx = avail_ports.index(st.session_state.arduino_port) if st.session_state.arduino_port in avail_ports else 0
+                chosen_port = st.selectbox("Select Arduino Serial Port", avail_ports, index=curr_idx, key="sel_arduino_port")
+                if chosen_port != st.session_state.arduino_port:
+                    st.session_state.arduino_port = chosen_port
+                    st.rerun()
+            with ac2:
+                is_conn, conn_msg = connect_arduino(st.session_state.arduino_port)
+                if is_conn:
+                    read_arduino_telemetry()
+                    st.success(f"🟢 {conn_msg}")
+                else:
+                    st.info(f"🟡 {conn_msg}")
+            with ac3:
+                if st.button("🔄 Force Relay Sync", use_container_width=True, key="btn_force_sync"):
+                    st.session_state.last_synced_cmds = {}
+                    st.rerun()
+
+            sl1, sl2, sl3 = st.columns(3)
+            with sl1:
+                new_ext = st.slider("Simulated Exterior Temp (°C)", 10, 110, hw["ambient_temp_c"], 1)
+                if new_ext != hw["ambient_temp_c"]:
+                    hw["ambient_temp_c"] = new_ext
+                    st.rerun()
+            with sl2:
+                new_cistern = st.slider("10,000L Cistern Level (L)", 0, 10000, hw["cistern_litres"], 250)
+                if new_cistern != hw["cistern_litres"]:
+                    hw["cistern_litres"] = new_cistern
+                    st.rerun()
+            with sl3:
+                pit = st.slider("Sump Pit Water Level (mm)", 50, 600, hw["sump_pit_mm"], 10)
+                if pit != hw["sump_pit_mm"]:
+                    hw["sump_pit_mm"] = pit
+                    st.rerun()
+
+        with st.expander("📜 VIP Security & Hardware Audit Trail"):
+            if st.session_state.security_log:
+                st.code("\n".join(st.session_state.security_log), language="text")
+            else:
+                st.caption("No security events logged in this session yet.")
+
+
+# ==============================================================================
+# 7. CONTINUOUS SERIAL HEARTBEAT & NEXT-OF-KIN WEBHOOK LOOP
+# ==============================================================================
+@st.fragment(run_every="5s")
+def background_watchdog_loop():
+    sync_hw_to_arduino()
+    push_nok_webhook_update(active_prop, hazards)
+
+background_watchdog_loop()
